@@ -2,7 +2,9 @@ use bevy_reflect::Reflect;
 impl_component! {
     #[derive(Copy, Debug, Default)]
     pub struct Position {
+        #[serde(default)]
         pub x: i32,
+        #[serde(default)]
         pub y: i32,
     }
 }
@@ -36,7 +38,6 @@ impl_component! {
         pub amount: i32,
     }
 }
-
 impl_component! {
     pub struct IsCool {}
 }

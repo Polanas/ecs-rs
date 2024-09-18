@@ -1,4 +1,3 @@
-
 use bevy_ptr::Ptr;
 use bevy_reflect::Reflect;
 use std::{any::Any, cell::RefMut, fmt::Debug};
@@ -8,7 +7,6 @@ use crate::{systems::EnumId, table::Storage};
 #[macro_export]
 macro_rules! impl_component {
     (
-        non-clonable,
         $( #[$meta:meta] )*
     //  ^~~~attributes~~~~^
         $vis:vis struct $name:ident (
@@ -21,7 +19,7 @@ macro_rules! impl_component {
         $(,)? );
     ) => {
         $( #[$meta] )*
-        #[derive(Reflect)]
+        #[derive(Clone, bevy_reflect::Reflect, serde::Serialize, serde::Deserialize)]
         $vis struct $name (
             $(
                 $( #[$field_meta] )*
@@ -29,47 +27,7 @@ macro_rules! impl_component {
             ),*
         );
 
-        impl $crate::components::component::Component for $name {
-            fn clone_into(
-                value: bevy_ptr::Ptr<'_>,
-                mut storage: std::cell::RefMut<$crate::table::Storage>,
-            ) {
-                panic!(
-                    "Attempt to clone non-clonable component {0}",
-                    std::any::type_name::<$t>()
-                );
-            }
-            fn as_reflect_ref(_: bevy_ptr::PtrMut<'_>, _: impl FnOnce(Option<&dyn bevy_reflect::Reflect>)) {
-                f(None);
-            }
-            fn as_reflect_mut(_: bevy_ptr::PtrMut<'_>, _: impl FnOnce(Option<&mut dyn bevy_reflect::Reflect>)) {
-                f(None);
-            }
-        }
-    };
-    (
-        non-reflect,
-        $( #[$meta:meta] )*
-    //  ^~~~attributes~~~~^
-        $vis:vis struct $name:ident (
-            $(
-                $( #[$field_meta:meta] )*
-    //          ^~~~field attributes~~~~^
-                $field_vis:vis $field_ty:ty
-    //          ^~~~~~a single field~~~~~~^
-            ),*
-        $(,)? );
-    ) => {
-        $( #[$meta] )*
-        #[derive(Clone)]
-        $vis struct $name (
-            $(
-                $( #[$field_meta] )*
-                $field_vis $field_ty
-            ),*
-        );
-
-        impl $crate::components::component::Component for $name {
+        impl $crate::components::component::AbstractComponent for $name {
             fn clone_into(
                 value: bevy_ptr::Ptr<'_>,
                 mut storage: std::cell::RefMut<$crate::table::Storage>,
@@ -77,84 +35,26 @@ macro_rules! impl_component {
                 let value = unsafe { value.deref::<$name>() };
                 storage.push(value.clone());
             }
-            fn as_reflect_ref(_: bevy_ptr::PtrMut<'_>, _: impl FnOnce(Option<&dyn bevy_reflect::Reflect>)) {
-                f(None);
-            }
-            fn as_reflect_mut(_: bevy_ptr::PtrMut<'_>, _: impl FnOnce(Option<&mut dyn bevy_reflect::Reflect>)) {
-                f(None);
-            }
-        }
-    };
-(
-        $( #[$meta:meta] )*
-    //  ^~~~attributes~~~~^
-        $vis:vis struct $name:ident (
-            $(
-                $( #[$field_meta:meta] )*
-    //          ^~~~field attributes~~~~^
-                $field_vis:vis $field_ty:ty
-    //          ^~~~~~a single field~~~~~~^
-            ),*
-        $(,)? );
-    ) => {
-        $( #[$meta] )*
-        #[derive(Clone, bevy_reflect::Reflect)]
-        $vis struct $name (
-            $(
-                $( #[$field_meta] )*
-                $field_vis $field_ty
-            ),*
-        );
-
-        impl $crate::components::component::Component for $name {
-            fn clone_into(
-                value: bevy_ptr::Ptr<'_>,
-                mut storage: std::cell::RefMut<$crate::table::Storage>,
-            ) {
+            fn as_reflect_ref(value: bevy_ptr::Ptr<'_>, f: &dyn Fn(Option<&dyn bevy_reflect::Reflect>)) {
                 let value = unsafe { value.deref::<$name>() };
-                storage.push(value.clone());
-            }
-            fn as_reflect_ref(value: bevy_ptr::PtrMut<'_>, f: impl FnOnce(Option<&(dyn bevy_reflect::Reflect )>)) {
-                let value = unsafe { value.deref_mut::<$name>() };
                 f(Some(value as &dyn bevy_reflect::Reflect));
             }
-            fn as_reflect_mut(value: bevy_ptr::PtrMut<'_>, f: impl FnOnce(Option<&mut (dyn bevy_reflect::Reflect)>)) {
+            fn as_reflect_mut(value: bevy_ptr::PtrMut<'_>, f: &dyn Fn(Option<&mut dyn bevy_reflect::Reflect>)) {
                 let value = unsafe { value.deref_mut::<$name>() };
                 f(Some(value as &mut dyn bevy_reflect::Reflect));
             }
-        }
-    };
-    {
-        non-reflect,
-        $( #[$meta:meta] )*
-        $vis:vis struct $name:ident {
-            $(
-                $( #[$field_meta:meta] )*
-                $field_vis:vis $field_name:ident : $field_ty:ty
-            ),*
-        $(,)? }
-    } => {
-        $( #[$meta] )*
-        #[derive(Clone)]
-        $vis struct $name {
-            $(
-                $( #[$field_meta] )*
-                $field_vis $field_name : $field_ty
-            ),*
-        }
-        impl $crate::components::component::Component for $name {
-            fn clone_into(
-                value: bevy_ptr::Ptr<'_>,
-                mut storage: std::cell::RefMut<$crate::table::Storage>,
-            ) {
+            fn serialize(value: bevy_ptr::Ptr<'_>) -> Result<serde_json::Value, serde_json::error::Error> {
                 let value = unsafe { value.deref::<$name>() };
-                storage.push(value.clone());
+                serde_json::to_value(&value)
             }
-            fn as_reflect_ref(_: bevy_ptr::PtrMut<'_>, f: impl FnOnce(Option<&(dyn bevy_reflect::Reflect)>)) {
-                f(None)
-            }
-            fn as_reflect_mut(_: bevy_ptr::PtrMut<'_>, f: impl FnOnce(Option<&mut (dyn bevy_reflect::Reflect)>)) {
-                f(None)
+
+            fn deserialize(
+                value: serde_json::Value,
+                mut storage: std::cell::RefMut<$crate::table::Storage>,
+            ) -> serde_json::Result<()> {
+                let value = serde_json::from_value::<Self>(value)?;
+                storage.push(value);
+                Ok(())
             }
         }
     };
@@ -168,14 +68,14 @@ macro_rules! impl_component {
         $(,)? }
     } => {
         $( #[$meta] )*
-        #[derive(Clone, bevy_reflect::Reflect)]
+        #[derive(Clone, bevy_reflect::Reflect, serde::Serialize, serde::Deserialize)]
         $vis struct $name {
             $(
                 $( #[$field_meta] )*
                 $field_vis $field_name : $field_ty
             ),*
         }
-        impl $crate::components::component::Component for $name {
+        impl $crate::components::component::AbstractComponent for $name {
             fn clone_into(
                 value: bevy_ptr::Ptr<'_>,
                 mut storage: std::cell::RefMut<$crate::table::Storage>,
@@ -184,16 +84,27 @@ macro_rules! impl_component {
                 storage.push(value.clone());
             }
 
-            fn as_reflect_ref(
-                value: bevy_ptr::PtrMut<'_>,
-                f: impl for<'a> FnOnce(Option<&(dyn bevy_reflect::Reflect)>),
-            ) {
-                let value = unsafe { value.deref_mut::<$name>() };
+            fn as_reflect_ref(value: bevy_ptr::Ptr<'_>, f: &dyn Fn(Option<&dyn bevy_reflect::Reflect>)) {
+                let value = unsafe { value.deref::<$name>() };
                 f(Some(value as &dyn bevy_reflect::Reflect));
             }
-            fn as_reflect_mut(value: bevy_ptr::PtrMut<'_>, f: impl FnOnce(Option<&mut dyn bevy_reflect::Reflect>)) {
+            fn as_reflect_mut(value: bevy_ptr::PtrMut<'_>, f: &dyn Fn(Option<&mut dyn bevy_reflect::Reflect>)) {
                 let value = unsafe { value.deref_mut::<$name>() };
                 f(Some(value as &mut dyn bevy_reflect::Reflect));
+            }
+
+            fn serialize(value: bevy_ptr::Ptr<'_>) -> Result<serde_json::Value, serde_json::error::Error> {
+                let value = unsafe { value.deref::<$name>() };
+                serde_json::to_value(&value)
+            }
+
+            fn deserialize(
+                value: serde_json::Value,
+                mut storage: std::cell::RefMut<$crate::table::Storage>,
+            ) -> serde_json::Result<()> {
+                let value = serde_json::from_value::<Self>(value)?;
+                storage.push(value);
+                Ok(())
             }
         }
     }
@@ -228,12 +139,12 @@ macro_rules! enum_tag {
         $($(#[$vmeta:meta])? $vname:ident $(,)?)*
     }) => {
         $(#[$meta])?
-        #[derive(Clone, Copy, bevy_reflect::Reflect)]
+        #[derive(Clone, Copy, bevy_reflect::Reflect, serde::Serialize, serde::Deserialize)]
         $vis enum $name {
             $($(#[$vmeta])? $vname,)*
         }
 
-        impl $crate::components::component::Component for $name {
+        impl $crate::components::component::AbstractComponent for $name {
             fn clone_into(
                 value: bevy_ptr::Ptr<'_>,
                 mut storage: std::cell::RefMut<$crate::table::Storage>,
@@ -242,13 +153,26 @@ macro_rules! enum_tag {
                 storage.push(value.clone());
             }
 
-            fn as_reflect_ref(value: bevy_ptr::PtrMut<'_>, f: impl FnOnce(Option<&dyn bevy_reflect::Reflect>)) {
-                let value = unsafe { value.deref_mut::<$name>() };
+            fn as_reflect_ref(value: bevy_ptr::Ptr<'_>, f: &dyn Fn(Option<&dyn bevy_reflect::Reflect>)) {
+                let value = unsafe { value.deref::<$name>() };
                 f(Some(value as &dyn bevy_reflect::Reflect));
             }
-            fn as_reflect_mut(value: bevy_ptr::PtrMut<'_>, f: impl FnOnce(Option<&mut dyn bevy_reflect::Reflect>)) {
+            fn as_reflect_mut(value: bevy_ptr::PtrMut<'_>, f: &dyn Fn(Option<&mut dyn bevy_reflect::Reflect>)) {
                 let value = unsafe { value.deref_mut::<$name>() };
                 f(Some(value as &mut dyn bevy_reflect::Reflect));
+            }
+            fn serialize(value: bevy_ptr::Ptr<'_>) -> Result<serde_json::Value, serde_json::error::Error> {
+                let value = unsafe { value.deref::<$name>() };
+                serde_json::to_value(&value)
+            }
+
+            fn deserialize(
+                value: serde_json::Value,
+                mut storage: std::cell::RefMut<$crate::table::Storage>,
+            ) -> serde_json::Result<()> {
+                let value = serde_json::from_value::<Self>(value)?;
+                storage.push(value);
+                Ok(())
             }
         }
 
@@ -275,20 +199,17 @@ macro_rules! enum_tag {
 impl_component! {
     pub struct ChildOf {}
 }
-
-pub trait Component: 'static + Sized {
+pub trait AbstractComponent: 'static + Sized {
     fn clone_into(value: Ptr<'_>, storage: RefMut<Storage>);
-    fn as_reflect_ref(
-        value: bevy_ptr::PtrMut<'_>,
-        f: impl for<'a> FnOnce(Option<&dyn Reflect>),
-    );
-    fn as_reflect_mut(
-        value: bevy_ptr::PtrMut<'_>,
-        f: impl FnOnce(Option<&mut dyn Reflect>),
-    );
+    fn as_reflect_ref(value: bevy_ptr::Ptr<'_>, f: &dyn Fn(Option<&dyn Reflect>));
+    fn as_reflect_mut(value: bevy_ptr::PtrMut<'_>, f: &dyn Fn(Option<&mut dyn Reflect>));
+    fn serialize(value: bevy_ptr::Ptr<'_>) -> Result<serde_json::Value, serde_json::error::Error>;
+    fn deserialize(
+        value: serde_json::Value,
+        storage: RefMut<Storage>,
+    ) -> serde_json::Result<()>;
 }
-
-pub trait EnumTag: Component + 'static {
+pub trait EnumTag: AbstractComponent + 'static {
     fn id(&self) -> EnumId;
     fn from_id(id: EnumId) -> Option<Self>;
 }

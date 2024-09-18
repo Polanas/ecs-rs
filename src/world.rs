@@ -5,7 +5,7 @@ use std::{
 };
 
 use crate::{
-    archetypes::{Archetypes, EntityKind, Prefab, StateOperation, ENTITY_ID}, components::component::Component, entity::Entity, events::{self, CurrentSystemTypeId, Event, EventIter, EventReader, Events}, on_change_callbacks::{OnAddCallback, OnRemoveCallback}, plugins::Plugins, query::{QueryData, QueryFilterData, QueryState, WorldQuery}, resources::ResourceQuery, systems::{
+    archetypes::{Archetypes, EntityKind, Prefab, StateOperation, ENTITY_ID}, components::component::AbstractComponent, entity::Entity, events::{self, CurrentSystemTypeId, Event, EventIter, EventReader, Events}, identifier::Identifier, on_change_callbacks::{OnAddCallback, OnRemoveCallback}, plugins::Plugins, query::{QueryData, QueryFilterData, QueryState, WorldQuery}, resources::ResourceQuery, systems::{
         AbstractSystemsWithStateData, EnumId, StateGetter, SystemStage, SystemState, Systems,
     }
 };
@@ -79,7 +79,7 @@ impl World {
         self.clone()
     }
 
-    pub fn comp_entity<T: Component>(&self) -> Entity {
+    pub fn comp_entity<T: AbstractComponent>(&self) -> Entity {
         archetypes_mut(|a| Entity(a.component_id::<T>()))
     }
 
@@ -99,7 +99,7 @@ impl World {
         self.clone()
     }
 
-    pub fn on_comp_add<T: Component>(&self, callback: impl Fn(Entity, World) + 'static) {
+    pub fn on_comp_add<T: AbstractComponent>(&self, callback: impl Fn(Entity, World) + 'static) {
         assert!(std::mem::size_of::<T>() > 0);
         archetypes_mut(|a| {
             let id = a.component_id::<T>();
@@ -107,7 +107,7 @@ impl World {
         })
     }
 
-    pub fn on_comp_remove<T: Component>(&self, callback: impl Fn(Entity, World) + 'static) {
+    pub fn on_comp_remove<T: AbstractComponent>(&self, callback: impl Fn(Entity, World) + 'static) {
         assert!(std::mem::size_of::<T>() > 0);
         archetypes_mut(|a| {
             let id = a.component_id::<T>();
@@ -115,7 +115,7 @@ impl World {
         })
     }
 
-    pub fn on_tag_add<T: Component>(callback: impl OnAddCallback) {
+    pub fn on_tag_add<T: AbstractComponent>(callback: impl OnAddCallback) {
         assert!(std::mem::size_of::<T>() == 0);
         archetypes_mut(|a| {
             let id = a.component_id::<T>();
@@ -123,7 +123,7 @@ impl World {
         })
     }
 
-    pub fn on_tag_remove<T: Component>(callback: impl OnRemoveCallback) {
+    pub fn on_tag_remove<T: AbstractComponent>(callback: impl OnRemoveCallback) {
         assert!(std::mem::size_of::<T>() == 0);
         archetypes_mut(|a| {
             let id = a.component_id::<T>();
@@ -219,7 +219,7 @@ impl World {
         }
     }
 
-    pub fn get_or_add_resource<T: Component>(
+    pub fn get_or_add_resource<T: AbstractComponent>(
         &self,
         init: impl FnOnce() -> T,
         get: impl for<'i> FnOnce(&T),

@@ -3,7 +3,7 @@ use std::{collections::BTreeSet, rc::Rc};
 use crate::{
     archetype::ArchetypeRow,
     archetypes::{Archetypes, WILDCARD_32, WILDCARD_RELATIONSHIP},
-    components::component::{ChildOf, Component},
+    components::component::{ChildOf, AbstractComponent},
     entity::Entity,
     identifier::Identifier,
     world::{archetypes, archetypes_mut},
@@ -21,7 +21,7 @@ impl Relationship {
         Self(id)
     }
 
-    pub fn new<R: Component, T: Component>() -> Self {
+    pub fn new<R: AbstractComponent, T: AbstractComponent>() -> Self {
         archetypes_mut(|a| a.relationship_id_typed::<R, T>().into())
     }
 
@@ -30,7 +30,7 @@ impl Relationship {
         relationship.into()
     }
 
-    pub fn new_mixed<R: Component>(target: Entity) -> Self {
+    pub fn new_mixed<R: AbstractComponent>(target: Entity) -> Self {
         archetypes_mut(|a| {
             let relation_id = a.component_id::<R>();
             let relationship = Archetypes::relationship_id(relation_id, target.0);

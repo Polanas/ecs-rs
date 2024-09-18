@@ -117,7 +117,7 @@ impl Table {
         let components: BTreeSet<_> = ids
             .iter()
             .filter(|id| **id != ENTITY_ID)
-            .filter(|id| registry_ref.layouts.contains_key(*id))
+            .filter(|id| registry_ref.layouts.contains_key(&id.stripped()))
             .copied()
             .collect();
         //SAFETY: creating a blob vec
@@ -125,7 +125,7 @@ impl Table {
             components
                 .iter()
                 //so that we don't create storage for the root archetype
-                .flat_map(|id| registry_ref.layouts.get(id).map(|l| (l, id)))
+                .flat_map(|id| registry_ref.layouts.get(&id.stripped()).map(|l| (l, id)))
                 .map(|(l, id)| {
                     let capacity = if id.is_relationship() {
                         RELATIONSHIPS_CAPACITY
@@ -373,11 +373,11 @@ mod tests {
         let component = Identifier::from(420);
         registry
             .borrow_mut()
-            .add_type_id(TypeId::of::<Name>(), component);
+            .add_type_id(TypeId::of::<Name>(), component, "Name");
         registry
             .borrow_mut()
             .layouts
-            .insert(component, Layout::new::<Name>());
+            .insert(component.stripped(), Layout::new::<Name>());
         let components = BTreeSet::from([component]);
         let mut table = Table::new(&components, registry.clone());
         table.push_entity(0);
@@ -400,11 +400,11 @@ mod tests {
         let component = Identifier::from(420);
         registry
             .borrow_mut()
-            .add_type_id(TypeId::of::<Position>(), component);
+            .add_type_id(TypeId::of::<Position>(), component, "Position");
         registry
             .borrow_mut()
             .layouts
-            .insert(component, Layout::new::<Position>());
+            .insert(component.stripped(), Layout::new::<Position>());
         let components = BTreeSet::from([component]);
         let mut table = Table::new(&components, registry.clone());
         for i in 0..500 {
@@ -428,12 +428,12 @@ mod tests {
         let component = Identifier::from(420);
         registry
             .borrow_mut()
-            .add_type_id(TypeId::of::<Position>(), component);
+            .add_type_id(TypeId::of::<Position>(), component, "Position");
         let entity = Identifier::from(0);
         registry
             .borrow_mut()
             .layouts
-            .insert(component, Layout::new::<Position>());
+            .insert(component.stripped(), Layout::new::<Position>());
         let components = BTreeSet::from([component]);
         let mut table = Table::new(&components, registry.clone());
         table.push_entity(entity.low32() as usize);

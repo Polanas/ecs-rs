@@ -23,7 +23,7 @@ impl ComponentsHash for BTreeSet<Identifier> {
         for id in self.iter() {
             //we want tables with different components set, but same actual data storages have
             //the save hash
-            if !archetypes.type_registry().layouts.contains_key(id) {
+            if !archetypes.type_registry().layouts.contains_key(&id.stripped()) {
                 continue;
             }
             hash = hash.wrapping_mul(314159);

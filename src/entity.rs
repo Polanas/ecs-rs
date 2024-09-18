@@ -7,7 +7,7 @@ use crate::{
     },
     children_iter::ChildrenRecursiveIter,
     components::{
-        component::{ChildOf, Component, EnumTag},
+        component::{AbstractComponent, ChildOf, EnumTag},
         component_bundle::ComponentBundle,
         component_query::ComponentQuery,
     },
@@ -78,9 +78,12 @@ impl Debug for Entity {
 }
 
 impl Entity {
-    fn name_parent(&self) -> Entity {
-        if self.has_rel::<ChildOf, Wildcard>() {
-            self.parent().unwrap()
+    pub fn serialize(&self) -> Option<String> {
+        archetypes(|archetypes| archetypes.serialize_entity(self.0))
+    }
+    pub fn name_parent(&self) -> Entity {
+        if let Some(parent) = self.find_rel::<ChildOf, Wildcard>() {
+            parent.0.into()
         } else {
             WILDCARD
         }
@@ -112,7 +115,7 @@ impl Entity {
     pub fn parent(&self) -> Option<Entity> {
         self.find_rel::<ChildOf, Wildcard>().map(|r| r.target())
     }
-    pub fn find_mixed_rels<R: Component>(&self, target: Entity) -> FindRelationshipsIter {
+    pub fn find_mixed_rels<R: AbstractComponent>(&self, target: Entity) -> FindRelationshipsIter {
         archetypes_mut(|archetypes| {
             let relation = archetypes.component_id::<R>();
             let record = archetypes.record(self.0).unwrap();
@@ -127,7 +130,7 @@ impl Entity {
             FindRelationshipsIter::from_archetype(archetype, relation.0, target.0)
         })
     }
-    pub fn find_rel<R: Component, T: Component>(&self) -> Option<Relationship> {
+    pub fn find_rel<R: AbstractComponent, T: AbstractComponent>(&self) -> Option<Relationship> {
         let (archetype, relation, target) = archetypes_mut(|archetypes| {
             let relation = archetypes.component_id::<R>();
             let target = archetypes.component_id::<T>();
@@ -138,15 +141,11 @@ impl Entity {
         //TODO: refactor rel methods
         FindRelationshipsIter::from_archetype(&archetype, relation, target).next()
     }
-    pub fn find_rels<R: Component, T: Component>(&self) -> FindRelationshipsIter {
-        let (archetype, relation, target) = archetypes_mut(|archetypes| {
-            let relation = archetypes.component_id::<R>();
-            let target = archetypes.component_id::<T>();
+    pub fn find_rels<R: AbstractComponent, T: AbstractComponent>(&self) -> FindRelationshipsIter {
+        archetypes_mut(|archetypes| {
             let record = archetypes.record(self.0).unwrap();
-            let archetype = archetypes.archetype_from_record(&record).unwrap();
-            (archetype.clone(), relation, target)
-        });
-        FindRelationshipsIter::from_archetype(&archetype, relation, target)
+            archetypes.find_rels::<R, T>(&record).unwrap()
+        })
     }
     pub fn rels(&self) -> RelationshipsIter {
         archetypes(|archetypes| {
@@ -228,7 +227,10 @@ impl Entity {
         *self
     }
 
-    pub fn get_or_add_comp<T: Component>(&self, init: impl FnOnce() -> T) -> ComponentGetter<T> {
+    pub fn get_or_add_comp<T: AbstractComponent>(
+        &self,
+        init: impl FnOnce() -> T,
+    ) -> ComponentGetter<T> {
         assert!(std::mem::size_of::<T>() > 0);
         if !self.has_comp::<T>() {
             self.add_comp(init());
@@ -246,7 +248,7 @@ impl Entity {
         archetypes_mut(|archetypes| archetypes.has_enum_tag(tag, self.0))
     }
 
-    pub fn set_enum_tag<T: EnumTag>(&self, tag: T) -> Entity {
+    pub fn add_enum_tag<T: EnumTag>(&self, tag: T) -> Entity {
         archetypes_mut(|archetypes| {
             archetypes.add_enum_tag(self.0, tag).unwrap();
         });
@@ -272,7 +274,7 @@ impl Entity {
         *self
     }
 
-    pub fn has_comp<T: Component>(&self) -> bool {
+    pub fn has_comp<T: AbstractComponent>(&self) -> bool {
         assert!(std::mem::size_of::<T>() > 0);
         archetypes_mut(|archetypes| {
             let id = archetypes.component_id::<T>();
@@ -280,7 +282,7 @@ impl Entity {
         })
     }
 
-    pub fn remove_tag<T: Component>(&self) -> Entity {
+    pub fn remove_tag<T: AbstractComponent>(&self) -> Entity {
         assert!(std::mem::size_of::<T>() == 0);
         archetypes_mut(|archetypes| {
             let id = archetypes.component_id::<T>();
@@ -289,7 +291,7 @@ impl Entity {
         *self
     }
 
-    pub fn add_rel_second<R: Component, T: Component>(&self, value: T) -> Self {
+    pub fn add_rel_second<R: AbstractComponent, T: AbstractComponent>(&self, value: T) -> Self {
         assert!(std::mem::size_of::<R>() == 0);
         assert!(std::mem::size_of::<T>() > 0);
         archetypes_mut(|archetypes| {
@@ -303,7 +305,7 @@ impl Entity {
         *self
     }
 
-    pub fn rel_second<R: Component, T: Component>(&self) -> ComponentGetter<T> {
+    pub fn rel_second<R: AbstractComponent, T: AbstractComponent>(&self) -> ComponentGetter<T> {
         assert!(std::mem::size_of::<R>() == 0);
         assert!(std::mem::size_of::<T>() > 0);
 
@@ -313,7 +315,7 @@ impl Entity {
         })
     }
 
-    pub fn rel_second_mut<R: Component, T: Component>(&self) -> ComponentGetter<T> {
+    pub fn rel_second_mut<R: AbstractComponent, T: AbstractComponent>(&self) -> ComponentGetter<T> {
         assert!(std::mem::size_of::<R>() == 0);
         assert!(std::mem::size_of::<T>() > 0);
 
@@ -323,7 +325,7 @@ impl Entity {
         })
     }
 
-    pub fn add_rel_first<R: Component, T: Component>(&self, value: R) -> Self {
+    pub fn add_rel_first<R: AbstractComponent, T: AbstractComponent>(&self, value: R) -> Self {
         assert!(std::mem::size_of::<R>() > 0);
         assert!(std::mem::size_of::<T>() == 0);
         {
@@ -338,7 +340,7 @@ impl Entity {
         *self
     }
 
-    pub fn rel_first<R: Component, T: Component>(&self) -> ComponentGetter<R> {
+    pub fn rel_first<R: AbstractComponent, T: AbstractComponent>(&self) -> ComponentGetter<R> {
         assert!(std::mem::size_of::<R>() > 0);
         assert!(std::mem::size_of::<T>() == 0);
 
@@ -348,7 +350,7 @@ impl Entity {
         })
     }
 
-    pub fn rel_first_mut<R: Component, T: Component>(&self) -> ComponentGetter<R> {
+    pub fn rel_first_mut<R: AbstractComponent, T: AbstractComponent>(&self) -> ComponentGetter<R> {
         assert!(std::mem::size_of::<R>() > 0);
         assert!(std::mem::size_of::<T>() == 0);
 
@@ -358,7 +360,7 @@ impl Entity {
         })
     }
 
-    pub fn has_mixed_rel<R: Component>(&self, target: Entity) -> bool {
+    pub fn has_mixed_rel<R: AbstractComponent>(&self, target: Entity) -> bool {
         archetypes_mut(|archetypes| {
             let relation_id = archetypes.component_id::<R>();
             let relationship = Archetypes::relationship_id(relation_id, target.0);
@@ -366,7 +368,7 @@ impl Entity {
         })
     }
 
-    pub fn add_mixed_rel<R: Component>(&self, target: Entity, value: R) -> Self {
+    pub fn add_mixed_rel<R: AbstractComponent>(&self, target: Entity, value: R) -> Self {
         assert!(std::mem::size_of::<R>() > 0);
         {
             archetypes_mut(|archetypes| {
@@ -379,7 +381,7 @@ impl Entity {
         *self
     }
 
-    pub fn add_mixed_tag_rel<R: Component>(&self, target: Entity) -> Self {
+    pub fn add_mixed_tag_rel<R: AbstractComponent>(&self, target: Entity) -> Self {
         assert!(std::mem::size_of::<R>() == 0);
         {
             archetypes_mut(|archetypes| {
@@ -392,7 +394,7 @@ impl Entity {
         *self
     }
 
-    pub fn mixed_rel<R: Component>(&self, target: Entity) -> ComponentGetter<R> {
+    pub fn mixed_rel<R: AbstractComponent>(&self, target: Entity) -> ComponentGetter<R> {
         assert!(std::mem::size_of::<R>() > 0);
         archetypes_mut(|archetypes| {
             let relation_id = archetypes.component_id::<R>();
@@ -401,7 +403,7 @@ impl Entity {
         })
     }
 
-    pub fn mixed_rel_mut<R: Component>(&self, target: Entity) -> ComponentGetter<R> {
+    pub fn mixed_rel_mut<R: AbstractComponent>(&self, target: Entity) -> ComponentGetter<R> {
         assert!(std::mem::size_of::<R>() > 0);
         archetypes_mut(|archetypes| {
             let relation_id = archetypes.component_id::<R>();
@@ -410,7 +412,7 @@ impl Entity {
         })
     }
 
-    pub fn remove_mixed_rel<R: Component>(&self, target: Entity) -> Self {
+    pub fn remove_mixed_rel<R: AbstractComponent>(&self, target: Entity) -> Self {
         archetypes_mut(|archetypes| {
             let relation_id = archetypes.component_id::<R>();
             let relationship = Archetypes::relationship_id(relation_id, target.0);
@@ -425,16 +427,16 @@ impl Entity {
         *self
     }
 
-    pub fn add_tag<T: Component>(&self) -> Entity {
+    pub fn add_tag<T: AbstractComponent>(&self) -> Entity {
         assert!(std::mem::size_of::<T>() == 0);
         archetypes_mut(|archetypes| {
             let tag = archetypes.component_id::<T>();
-            archetypes.add_entity_tag(self.0, tag).unwrap();
+            archetypes.add_component_tag(self.0, tag).unwrap();
         });
         *self
     }
 
-    pub fn has_tag<T: Component>(&self) -> bool {
+    pub fn has_tag<T: AbstractComponent>(&self) -> bool {
         assert!(std::mem::size_of::<T>() == 0);
         archetypes_mut(|archetypes| {
             let tag = archetypes.component_id::<T>();
@@ -480,7 +482,7 @@ impl Entity {
         *self
     }
 
-    pub fn add_rel<R: Component, T: Component>(&self) -> Self {
+    pub fn add_rel<R: AbstractComponent, T: AbstractComponent>(&self) -> Self {
         assert!(std::mem::size_of::<T>() == 0);
         assert!(std::mem::size_of::<R>() == 0);
         archetypes_mut(|archetypes| {
@@ -493,7 +495,7 @@ impl Entity {
         *self
     }
 
-    pub fn remove_rel<R: Component, T: Component>(&self) -> Self {
+    pub fn remove_rel<R: AbstractComponent, T: AbstractComponent>(&self) -> Self {
         archetypes_mut(|archetypes| {
             let relationship = archetypes.relationship_id_typed::<R, T>();
             let table_reusage = if archetypes.is_component_empty(relationship) {
@@ -512,7 +514,7 @@ impl Entity {
         archetypes_mut(|archetypes| Self(archetypes.clone_entity(self.0).unwrap()))
     }
 
-    pub fn has_rel<R: Component, T: Component>(&self) -> bool {
+    pub fn has_rel<R: AbstractComponent, T: AbstractComponent>(&self) -> bool {
         archetypes_mut(|archetypes| {
             let relationship = archetypes.relationship_id_typed::<R, T>();
             archetypes.has_component(relationship, self.0)
@@ -523,7 +525,7 @@ impl Entity {
         archetypes_mut(|archetypes| archetypes.has_component(tag.0, self.0))
     }
 
-    pub fn get_comp<T: Component>(&self) -> ComponentGetter<T> {
+    pub fn get_comp<T: AbstractComponent>(&self) -> ComponentGetter<T> {
         assert!(std::mem::size_of::<T>() > 0);
         archetypes_mut(|archetypes| {
             let id = archetypes.component_id::<T>();
@@ -536,7 +538,7 @@ impl Entity {
         })
     }
 
-    pub fn comp<T: Component>(&self, f: impl FnOnce(&T)) -> Entity {
+    pub fn comp<T: AbstractComponent>(&self, f: impl FnOnce(&T)) -> Entity {
         assert!(std::mem::size_of::<T>() > 0);
         archetypes_mut(|archetypes| {
             let id = archetypes.component_id::<T>();
@@ -553,7 +555,7 @@ impl Entity {
         *self
     }
 
-    pub fn comp_mut<T: Component>(&self, f: impl FnOnce(&mut T)) -> Entity {
+    pub fn comp_mut<T: AbstractComponent>(&self, f: impl FnOnce(&mut T)) -> Entity {
         assert!(std::mem::size_of::<T>() > 0);
         archetypes_mut(|archetypes| {
             let id = archetypes.component_id::<T>();
@@ -579,7 +581,7 @@ impl Entity {
         f(T::fetch(self))
     }
 
-    pub fn try_get_comp<T: Component>(&self) -> Option<ComponentGetter<T>> {
+    pub fn try_get_comp<T: AbstractComponent>(&self) -> Option<ComponentGetter<T>> {
         assert!(std::mem::size_of::<T>() > 0);
         archetypes_mut(|archetypes| {
             let id = archetypes.component_id::<T>();
@@ -1100,14 +1102,14 @@ mod tests {
         }
 
         let world = World::new();
-        let e = world.add_entity().set_enum_tag(PlayerState::Walking);
+        let e = world.add_entity().add_enum_tag(PlayerState::Walking);
 
         assert!(e.has_any_enum_tag::<PlayerState>());
         assert!(e.has_enum_tag(PlayerState::Walking));
         assert!(!e.has_enum_tag(PlayerState::Falling));
         assert_eq!(e.enum_tag::<PlayerState>(), PlayerState::Walking);
 
-        e.set_enum_tag(PlayerState::Falling);
+        e.add_enum_tag(PlayerState::Falling);
         assert!(e.has_enum_tag(PlayerState::Falling));
         assert_eq!(e.enum_tag::<PlayerState>(), PlayerState::Falling);
 
@@ -1119,7 +1121,7 @@ mod tests {
             }
         }
 
-        e.set_enum_tag(Progerss::Pro);
+        e.add_enum_tag(Progerss::Pro);
 
         let mut query = world
             .query::<()>()
@@ -1694,6 +1696,33 @@ mod tests {
         dynamic_struct.insert("int".to_string(), 25);
         let some_values = SomeValues::from_reflect(&dynamic_struct);
         dbg!(some_values);
+    }
+
+    #[test]
+    fn serialization() {
+        enum_tag! {
+            #[derive(Debug, Eq, PartialEq)]
+            enum MyEnumTag {
+                StateOne
+            }
+        }
+
+        let world = World::new();
+        let entity_tag = world.add_entity();
+        let child = world.add_entity();
+        let entity = world
+            .add_entity()
+            .add_comp(Position::new(1, 2))
+            .add_tag::<IsCool>()
+            .add_ent_tag(entity_tag)
+            .add_enum_tag(MyEnumTag::StateOne)
+            .add_rel::<Likes, Apples>()
+            .add_child_of(child)
+            .add_rel_first::<Owes, Apples>(Owes { amount: 10 })
+            .add_rel_second::<Begin, _>(Position::new(2, 3))
+            .serialize()
+            .unwrap();
+        println!("{entity}");
     }
 }
 

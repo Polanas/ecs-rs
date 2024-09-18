@@ -6,6 +6,7 @@ use std::{
 };
 use bevy_ptr::{OwningPtr, Ptr};
 use bevy_utils::HashMap;
+use smol_str::ToSmolStr;
 
 use crate::{
     archetypes::{
@@ -72,7 +73,7 @@ pub struct Archetype {
     table: Rc<RefCell<Table>>,
     id: ArchetypeId,
     edges: HashMap<Identifier, Edge>,
-    components: BTreeSet<Identifier>,
+    components: Rc<BTreeSet<Identifier>>,
     components_vec: Vec<Identifier>,
     count: usize,
     registry: Rc<RefCell<MyTypeRegistry>>,
@@ -90,7 +91,7 @@ impl Archetype {
         let components_vec: Vec<_> = components.iter().cloned().collect();
         Self {
             entity_indices: entities,
-            components,
+            components: components.into(),
             components_vec,
             edges: HashMap::new(),
             table,
@@ -202,15 +203,15 @@ impl Archetype {
                     registry
                         .type_names
                         .get(&relation.low32())
-                        .cloned()
-                        .unwrap_or("Relation".to_string())
+                        .map(|s| s.to_smolstr())
+                        .unwrap_or("Relation".to_smolstr())
                 });
                 let target_name = archetypes.debug_id_name(target).unwrap_or_else(|| {
                     registry
                         .type_names
                         .get(&target.low32())
-                        .cloned()
-                        .unwrap_or("Target".to_string())
+                        .map(|s| s.to_smolstr())
+                        .unwrap_or("Target".to_smolstr())
                 });
                 &format!("({relation_name}, {target_name})")
             } else if let Some(name) = registry.type_names.get(&component.low32()) {
@@ -228,6 +229,10 @@ impl Archetype {
         let table = self.table.borrow();
         let id = table.component_id::<T>()?;
         table.storage(id).cloned()
+    }
+
+    pub fn components_ids_set_rc(&self) -> &Rc<BTreeSet<Identifier>> {
+        &self.components
     }
 
     pub fn components_ids_set(&self) -> &BTreeSet<Identifier> {

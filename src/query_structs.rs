@@ -2,18 +2,18 @@ use std::{any::TypeId, marker::PhantomData};
 
 use crate::{
     archetypes::{self, Wildcard},
-    components::component::Component,
+    components::component::AbstractComponent,
     filter_mask::FilterMask,
     identifier::Identifier,
     query::{FilterMaskHint, QueryFilterData},
     world::archetypes_mut,
 };
 
-pub trait RelationArgument: Component {
+pub trait RelationArgument: AbstractComponent {
     fn id() -> Identifier;
 }
 
-impl<T: Component> RelationArgument for T {
+impl<T: AbstractComponent> RelationArgument for T {
     fn id() -> Identifier {
         if TypeId::of::<T>() == TypeId::of::<Wildcard>() {
             archetypes::WILDCARD_RELATIONSHIP
@@ -51,11 +51,11 @@ impl<R: RelationArgument, T: RelationArgument> QueryFilterData for WithRelation<
     }
 }
 
-pub struct Without<T: Component> {
+pub struct Without<T: AbstractComponent> {
     data: PhantomData<T>,
 }
 
-impl<T: Component> QueryFilterData for Without<T> {
+impl<T: AbstractComponent> QueryFilterData for Without<T> {
     fn mask(mask: &mut FilterMask, hint: FilterMaskHint) {
         archetypes_mut(|a| {
             match hint {
@@ -75,11 +75,11 @@ impl<T: QueryFilterData> QueryFilterData for Not<T> {
     }
 }
 
-pub struct With<T: Component> {
+pub struct With<T: AbstractComponent> {
     data: PhantomData<T>,
 }
 
-impl<T: Component> QueryFilterData for With<T> {
+impl<T: AbstractComponent> QueryFilterData for With<T> {
     fn mask(mask: &mut FilterMask, hint: FilterMaskHint) {
         archetypes_mut(|a| {
             match hint {

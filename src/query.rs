@@ -18,7 +18,7 @@ pub use crate::{
 use crate::{
     archetypes::QueryStorage,
     borrow_traits::BorrowFn,
-    components::component::Component,
+    components::component::AbstractComponent,
     filter_mask::FilterMask,
     identifier::Identifier,
     table::TableRow,
@@ -124,7 +124,7 @@ pub trait QueryData: WorldQuery {
     fn ids(ids: &mut RequiredIds);
 }
 
-impl<T: Component> WorldQuery for Option<&T> {
+impl<T: AbstractComponent> WorldQuery for Option<&T> {
     type Item<'i> = Option<Ref<'i, T>>;
 
     fn fetch<'w>(
@@ -144,7 +144,7 @@ impl<T: Component> WorldQuery for Option<&T> {
     }
 }
 
-impl<T: Component> WorldQuery for Option<&mut T> {
+impl<T: AbstractComponent> WorldQuery for Option<&mut T> {
     type Item<'i> = Option<Mut<'i, T>>;
 
     fn fetch<'w>(
@@ -165,7 +165,7 @@ impl<T: Component> WorldQuery for Option<&mut T> {
         }))
     }
 }
-impl<T: Component> WorldQuery for &T {
+impl<T: AbstractComponent> WorldQuery for &T {
     type Item<'i> = Ref<'i, T>;
 
     fn fetch<'w>(
@@ -186,7 +186,7 @@ impl<T: Component> WorldQuery for &T {
     }
 }
 
-impl<T: Component> WorldQuery for &mut T {
+impl<T: AbstractComponent> WorldQuery for &mut T {
     type Item<'i> = Mut<'i, T>;
 
     fn fetch<'w>(
@@ -206,7 +206,7 @@ impl<T: Component> WorldQuery for &mut T {
     }
 }
 
-impl<T: Component> QueryData for Option<&T> {
+impl<T: AbstractComponent> QueryData for Option<&T> {
     fn ids(ids: &mut RequiredIds) {
         archetypes_mut(|archetypes| {
             let component = archetypes.component_id::<T>();
@@ -218,7 +218,7 @@ impl<T: Component> QueryData for Option<&T> {
         })
     }
 }
-impl<T: Component> QueryData for Option<&mut T> {
+impl<T: AbstractComponent> QueryData for Option<&mut T> {
     fn ids(ids: &mut RequiredIds) {
         archetypes_mut(|archetypes| {
             let component = archetypes.component_id::<T>();
@@ -230,7 +230,7 @@ impl<T: Component> QueryData for Option<&mut T> {
         })
     }
 }
-impl<T: Component> QueryData for &T {
+impl<T: AbstractComponent> QueryData for &T {
     fn ids(ids: &mut RequiredIds) {
         archetypes_mut(|archetypes| {
             let component = archetypes.component_id::<T>();
@@ -242,7 +242,7 @@ impl<T: Component> QueryData for &T {
         })
     }
 }
-impl<T: Component> QueryData for &mut T {
+impl<T: AbstractComponent> QueryData for &mut T {
     fn ids(ids: &mut RequiredIds) {
         archetypes_mut(|archetypes| {
             let component = archetypes.component_id::<T>();
@@ -624,7 +624,7 @@ impl<D: QueryData, F: QueryFilterData> QueryState<D, F> {
         Query::new(self, storage)
     }
 
-    pub fn term_relation<T: Component>(mut self, term_index: usize) -> Self {
+    pub fn term_relation<T: AbstractComponent>(mut self, term_index: usize) -> Self {
         let term = self.ids.values[term_index];
         archetypes_mut(|archetypes| {
             let relation = archetypes.component_id::<T>();
@@ -635,7 +635,7 @@ impl<D: QueryData, F: QueryFilterData> QueryState<D, F> {
         self
     }
 
-    pub fn term_target<T: Component>(mut self, term_index: usize) -> Self {
+    pub fn term_target<T: AbstractComponent>(mut self, term_index: usize) -> Self {
         let term = self.ids.values[term_index];
         archetypes_mut(|archetypes| {
             let relation = id_or_relation(archetypes, term.value);
@@ -646,7 +646,7 @@ impl<D: QueryData, F: QueryFilterData> QueryState<D, F> {
         self
     }
 
-    pub fn set_relation<R: Component>(mut self, id: QueryComoponentId) -> Self {
+    pub fn set_relation<R: AbstractComponent>(mut self, id: QueryComoponentId) -> Self {
         let relation = archetypes_mut(|archetypes| archetypes.component_id::<R>());
         if id.0 as usize >= self.ids.values.len() {
             panic!(
@@ -674,7 +674,7 @@ impl<D: QueryData, F: QueryFilterData> QueryState<D, F> {
         self
     }
 
-    pub fn set_target<T: Component>(mut self, id: QueryComoponentId) -> Self {
+    pub fn set_target<T: AbstractComponent>(mut self, id: QueryComoponentId) -> Self {
         let target = archetypes_mut(|archetypes| archetypes.component_id::<T>());
         if id.0 as usize >= self.ids.values.len() {
             panic!(
@@ -738,7 +738,7 @@ impl<D: QueryData, F: QueryFilterData> QueryState<D, F> {
         self
     }
 
-    pub fn with_comp<T: Component>(mut self) -> Self {
+    pub fn with_comp<T: AbstractComponent>(mut self) -> Self {
         assert!(std::mem::size_of::<T>() > 0);
         archetypes_mut(|archetypes| {
             self.mask.push_has(archetypes.component_id::<T>());
@@ -746,7 +746,7 @@ impl<D: QueryData, F: QueryFilterData> QueryState<D, F> {
         self
     }
 
-    pub fn without_comp<T: Component>(mut self) -> Self {
+    pub fn without_comp<T: AbstractComponent>(mut self) -> Self {
         assert!(std::mem::size_of::<T>() > 0);
         archetypes_mut(|archetypes| {
             self.mask.push_not(archetypes.component_id::<T>());
@@ -754,7 +754,7 @@ impl<D: QueryData, F: QueryFilterData> QueryState<D, F> {
         self
     }
 
-    pub fn with_any_comp<T: Component>(mut self) -> Self {
+    pub fn with_any_comp<T: AbstractComponent>(mut self) -> Self {
         assert!(std::mem::size_of::<T>() > 0);
         archetypes_mut(|archetypes| {
             self.mask.push_any_has(archetypes.component_id::<T>());
@@ -762,14 +762,14 @@ impl<D: QueryData, F: QueryFilterData> QueryState<D, F> {
         self
     }
 
-    pub fn without_any_comp<T: Component>(mut self) -> Self {
+    pub fn without_any_comp<T: AbstractComponent>(mut self) -> Self {
         assert!(std::mem::size_of::<T>() > 0);
         archetypes_mut(|archetypes| {
             self.mask.push_any_has(archetypes.component_id::<T>());
         });
         self
     }
-    pub fn with_tag<T: Component>(mut self) -> Self {
+    pub fn with_tag<T: AbstractComponent>(mut self) -> Self {
         assert!(std::mem::size_of::<T>() == 0);
         archetypes_mut(|archetypes| {
             self.mask.push_has(archetypes.component_id::<T>());
@@ -777,7 +777,7 @@ impl<D: QueryData, F: QueryFilterData> QueryState<D, F> {
         self
     }
 
-    pub fn without_tag<T: Component>(mut self) -> Self {
+    pub fn without_tag<T: AbstractComponent>(mut self) -> Self {
         assert!(std::mem::size_of::<T>() == 0);
         archetypes_mut(|archetypes| {
             self.mask.push_not(archetypes.component_id::<T>());
@@ -785,7 +785,7 @@ impl<D: QueryData, F: QueryFilterData> QueryState<D, F> {
         self
     }
 
-    pub fn with_any_tag<T: Component>(mut self) -> Self {
+    pub fn with_any_tag<T: AbstractComponent>(mut self) -> Self {
         assert!(std::mem::size_of::<T>() == 0);
         archetypes_mut(|archetypes| {
             self.mask.push_any_has(archetypes.component_id::<T>());
@@ -793,7 +793,7 @@ impl<D: QueryData, F: QueryFilterData> QueryState<D, F> {
         self
     }
 
-    pub fn without_any_tag<T: Component>(mut self) -> Self {
+    pub fn without_any_tag<T: AbstractComponent>(mut self) -> Self {
         assert!(std::mem::size_of::<T>() == 0);
         archetypes_mut(|archetypes| {
             self.mask.push_any_has(archetypes.component_id::<T>());
@@ -801,7 +801,7 @@ impl<D: QueryData, F: QueryFilterData> QueryState<D, F> {
         self
     }
 
-    pub fn with_rel<R: Component, T: Component>(mut self) -> Self {
+    pub fn with_rel<R: AbstractComponent, T: AbstractComponent>(mut self) -> Self {
         archetypes_mut(|archetypes| {
             let relationship = archetypes.relationship_id_typed::<R, T>();
             self.mask.push_has(relationship);
@@ -821,7 +821,7 @@ impl<D: QueryData, F: QueryFilterData> QueryState<D, F> {
         self
     }
 
-    pub fn without_rel<R: Component, T: Component>(mut self) -> Self {
+    pub fn without_rel<R: AbstractComponent, T: AbstractComponent>(mut self) -> Self {
         archetypes_mut(|archetypes| {
             let relationship = archetypes.relationship_id_typed::<R, T>();
             self.mask.push_not(relationship);
@@ -829,7 +829,7 @@ impl<D: QueryData, F: QueryFilterData> QueryState<D, F> {
         self
     }
 
-    pub fn with_any_rel<R: Component, T: Component>(mut self) -> Self {
+    pub fn with_any_rel<R: AbstractComponent, T: AbstractComponent>(mut self) -> Self {
         archetypes_mut(|archetypes| {
             let relationship = archetypes.relationship_id_typed::<R, T>();
             self.mask.push_any_has(relationship);
@@ -837,7 +837,7 @@ impl<D: QueryData, F: QueryFilterData> QueryState<D, F> {
         self
     }
 
-    pub fn without_any_rel<R: Component, T: Component>(mut self) -> Self {
+    pub fn without_any_rel<R: AbstractComponent, T: AbstractComponent>(mut self) -> Self {
         archetypes_mut(|archetypes| {
             let relationship = archetypes.relationship_id_typed::<R, T>();
             self.mask.push_any_not(relationship);
@@ -845,7 +845,7 @@ impl<D: QueryData, F: QueryFilterData> QueryState<D, F> {
         self
     }
 
-    pub fn without_any_mixed_rel<T: Component>(mut self, target: Entity) -> Self {
+    pub fn without_any_mixed_rel<T: AbstractComponent>(mut self, target: Entity) -> Self {
         archetypes_mut(|archetypes| {
             let relation_id = archetypes.component_id::<T>();
             let relationship = Archetypes::relationship_id(target.0, relation_id);
@@ -853,7 +853,7 @@ impl<D: QueryData, F: QueryFilterData> QueryState<D, F> {
         });
         self
     }
-    pub fn with_any_mixed_rel<T: Component>(mut self, target: Entity) -> Self {
+    pub fn with_any_mixed_rel<T: AbstractComponent>(mut self, target: Entity) -> Self {
         archetypes_mut(|archetypes| {
             let relation_id = archetypes.component_id::<T>();
             let relationship = Archetypes::relationship_id(target.0, relation_id);
@@ -861,7 +861,7 @@ impl<D: QueryData, F: QueryFilterData> QueryState<D, F> {
         });
         self
     }
-    pub fn without_mixed_rel<T: Component>(mut self, target: Entity) -> Self {
+    pub fn without_mixed_rel<T: AbstractComponent>(mut self, target: Entity) -> Self {
         archetypes_mut(|archetypes| {
             let relation_id = archetypes.component_id::<T>();
             let relationship = Archetypes::relationship_id(target.0, relation_id);
@@ -869,7 +869,7 @@ impl<D: QueryData, F: QueryFilterData> QueryState<D, F> {
         });
         self
     }
-    pub fn with_mixed_rel<T: Component>(mut self, target: Entity) -> Self {
+    pub fn with_mixed_rel<T: AbstractComponent>(mut self, target: Entity) -> Self {
         archetypes_mut(|archetypes| {
             let relation_id = archetypes.component_id::<T>();
             let relationship = Archetypes::relationship_id(target.0, relation_id);

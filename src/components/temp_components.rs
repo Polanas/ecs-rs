@@ -5,7 +5,7 @@ use bevy_utils::HashMap;
 
 use crate::{archetypes::TEMP_CAPACITY, blob_vec::BlobVec, identifier::Identifier, table::Storage};
 
-use super::component::Component;
+use super::component::AbstractComponent;
 
 pub struct TempComponentsStorage {
     pub storages: HashMap<Identifier, Storage>,
@@ -18,7 +18,7 @@ impl TempComponentsStorage {
         }
     }
 
-    pub fn add_comp<T: Component>(&mut self, component: Identifier, value: T) -> usize {
+    pub fn add_comp<T: AbstractComponent>(&mut self, component: Identifier, value: T) -> usize {
         let storage = &mut self.storage::<T>(component);
         storage.push(value);
         storage.len() - 1
@@ -29,7 +29,7 @@ impl TempComponentsStorage {
         unsafe { storage.0.swap_remove_and_forget_unchecked(0) }
     }
 
-    pub fn storage<T: Component>(&mut self, component: Identifier) -> &mut Storage {
+    pub fn storage<T: AbstractComponent>(&mut self, component: Identifier) -> &mut Storage {
         let layout = Layout::new::<T>();
         self.storages
             .entry(component)

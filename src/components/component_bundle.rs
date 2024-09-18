@@ -2,7 +2,7 @@ use std::{cell::RefCell, rc::Rc};
 
 use crate::{archetypes::TableReusage, entity::Entity, world::archetypes_mut};
 
-use super::component::Component;
+use super::component::AbstractComponent;
 
 #[macro_export]
 macro_rules! component_bundle {
@@ -46,7 +46,7 @@ pub trait ComponentBundle {
     fn remove(entity: &Entity);
 }
 
-impl<T: Component> ComponentBundle for Option<T> {
+impl<T: AbstractComponent> ComponentBundle for Option<T> {
     fn add(self, entity: &Entity) {
         let Some(component) = self else {
             return;
@@ -76,7 +76,7 @@ impl<T: Component> ComponentBundle for Option<T> {
         archetypes_mut(|a| a.unlock());
     }
 }
-impl<T: Component> ComponentBundle for T {
+impl<T: AbstractComponent> ComponentBundle for T {
     fn add(self, entity: &Entity) {
         let (id, callbacks) = archetypes_mut(|archetypes| {
             let id = archetypes.component_id::<T>();

@@ -1,0 +1,21 @@
+{
+    "Name": "Some name",
+    "Position": {
+        "x": 1,
+        "y": 2
+    },
+    "Tags": [
+        "ATypeTag",
+        "CustomTag"
+    ],
+    "Relationships": [
+        "(Likes, Apples)"
+    ],
+    "(Start, $Velocity)": {
+        "x": 2,
+        "y": 3
+    },
+    "($Owes, Apples)": {
+        "amount": 101
+    }
+}

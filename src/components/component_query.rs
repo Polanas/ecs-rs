@@ -1,6 +1,6 @@
 use crate::entity::Entity;
 
-use super::component::Component;
+use super::component::AbstractComponent;
 
 macro_rules! impl_component_query {
     ($($params:ident),+) => {
@@ -35,7 +35,7 @@ pub trait ComponentQuery {
     fn fetch(entity: &Entity) -> Self::Item<'_>;
 }
 
-impl<T: Component> ComponentQuery for &T {
+impl<T: AbstractComponent> ComponentQuery for &T {
     type Item<'i> = &'i T;
 
     fn fetch(entity: &Entity) -> Self::Item<'_> {
@@ -43,7 +43,7 @@ impl<T: Component> ComponentQuery for &T {
     }
 }
 
-impl<T: Component> ComponentQuery for &mut T {
+impl<T: AbstractComponent> ComponentQuery for &mut T {
     type Item<'i> = &'i T;
 
     fn fetch(entity: &Entity) -> Self::Item<'_> {
@@ -53,7 +53,7 @@ impl<T: Component> ComponentQuery for &mut T {
     }
 }
 
-impl<T: Component> ComponentQuery for Option<&T> {
+impl<T: AbstractComponent> ComponentQuery for Option<&T> {
     type Item<'i> = Option<&'i T>;
 
     fn fetch(entity: &Entity) -> Self::Item<'_> {
@@ -65,7 +65,7 @@ impl<T: Component> ComponentQuery for Option<&T> {
     }
 }
 
-impl<T: Component> ComponentQuery for Option<&mut T> {
+impl<T: AbstractComponent> ComponentQuery for Option<&mut T> {
     type Item<'i> = Option<&'i mut T>;
 
     fn fetch(entity: &Entity) -> Self::Item<'_> {

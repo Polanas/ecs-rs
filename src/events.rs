@@ -6,8 +6,6 @@ use bevy_utils::hashbrown::{HashMap, HashSet};
 use crate::{systems::SystemId, world::World};
 
 impl_component! {
-    non-reflect,
-    #[derive(Copy)]
     pub(crate) struct CurrentSystemTypeId {
         pub(crate) value: SystemId,
     }

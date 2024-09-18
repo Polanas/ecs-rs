@@ -7,6 +7,7 @@ use std::{
 
 use bevy_reflect::Reflect;
 use bevy_utils::{hashbrown::HashMap, HashSet};
+use serde::{Deserialize, Serialize};
 
 use crate::{events::CurrentSystemTypeId, world::World};
 
@@ -603,7 +604,7 @@ pub struct States {
 //     }
 // }
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Reflect, Serialize, Deserialize)]
 pub struct SystemId(pub u64);
 
 thread_local! {
