@@ -12,6 +12,12 @@ use crate::archetypes::{StrippedIdentifier, WILDCARD_25, WILDCARD_32};
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Default, PartialOrd, Ord, Reflect)]
 pub struct Identifier(pub [u8; 8]);
 
+impl From<Identifier> for u64 {
+    fn from(value: Identifier) -> Self {
+        u64::from_be_bytes(value.0)
+    }
+}
+
 impl Debug for Identifier {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let value = u64::from_be_bytes(self.0);

@@ -9,12 +9,12 @@ use std::{
 };
 
 use anyhow::{bail, Result};
-use bevy_ptr::{OwningPtr, Ptr, PtrMut};
+use bevy_ptr::{Ptr, PtrMut};
 use bevy_reflect::Reflect;
 use bevy_utils::{hashbrown::HashMap, HashSet};
 use bimap::BiHashMap;
 use packed_struct::PackedStruct;
-use smol_str::{SmolStr, ToSmolStr};
+use smol_str::{format_smolstr, SmolStr, ToSmolStr};
 use thiserror::Error;
 
 use crate::{
@@ -25,16 +25,15 @@ use crate::{
         component_hash::ComponentsHash,
         temp_components::TempComponentsStorage,
     },
-    entity::{self, Entity, WILDCARD},
+    entity::{Entity, WILDCARD},
     filter_mask::FilterMask,
     identifier::{Identifier, IdentifierHigh32, IdentifierUnpacked, WildcardKind},
     on_change_callbacks::{OnAddCallback, OnChangeCallbacks, OnRemoveCallback},
     query::RequiredIds,
-    relationship::{FindRelationshipsIter, Relationship},
-    resources::ResourceQuery,
+    relationship::FindRelationshipsIter,
     systems::{EnumId, Systems},
     table::{Storage, Table, TableRow},
-    world::{archetypes, archetypes_mut, World},
+    world::{archetypes, archetypes_mut},
     wrappers::{ArchetypeCell, TableCell},
 };
 pub const TEMP_CAPACITY: usize = 32;
@@ -137,10 +136,10 @@ pub struct Functions {
 pub struct MyTypeRegistry {
     pub layouts: HashMap<StrippedIdentifier, Layout>,
     pub functions: HashMap<Identifier, Functions>,
-    pub type_ids_data: HashMap<Identifier, (TypeId, SmolStr)>,
+    pub type_ids_data: HashMap<StrippedIdentifier, (TypeId, SmolStr)>,
     pub identifiers: HashMap<TypeId, Identifier>,
+    pub identifiers_by_names: HashMap<SmolStr, Identifier>,
     pub components: HashSet<Identifier>,
-    pub type_names: HashMap<u32, String>,
     pub tags: HashSet<StrippedIdentifier>,
 }
 
@@ -291,14 +290,16 @@ impl MyTypeRegistry {
             components: HashSet::new(),
             tags: HashSet::new(),
             layouts: HashMap::new(),
-            type_names: HashMap::new(),
             functions: HashMap::new(),
+            identifiers_by_names: HashMap::new(),
         }
     }
 
     pub fn add_type_id(&mut self, type_id: TypeId, id: Identifier, name: &str) {
         self.identifiers.insert(type_id, id);
-        self.type_ids_data.insert(id, (type_id, name.to_smolstr()));
+        self.type_ids_data
+            .insert(id.stripped(), (type_id, name.to_smolstr()));
+        self.identifiers_by_names.insert(name.to_smolstr(), id);
     }
 }
 
@@ -463,12 +464,6 @@ impl Archetypes {
         {
             let mut registry = archetypes.type_registry.borrow_mut();
             registry
-                .type_names
-                .insert(ENTITY_ID.low32(), "Entity".to_owned());
-            registry
-                .type_names
-                .insert(COMPONENT_ID.low32(), "Component".to_owned());
-            registry
                 .layouts
                 .insert(ENTITY_ID.stripped(), Layout::new::<Entity>());
             registry
@@ -486,9 +481,9 @@ impl Archetypes {
         )
         .into();
         archetypes.add_archetype(&table, &entity_archetype_components);
-        archetypes.component_id::<ChildOf>();
-        archetypes.component_id::<EnumTagId>();
         archetypes.component_id::<InstanceOf>();
+        archetypes.component_id::<EnumTagId>();
+        archetypes.component_id::<ChildOf>();
         archetypes
     }
 
@@ -604,7 +599,41 @@ impl Archetypes {
         }) {
             return Some(name.clone());
         }
-        todo!()
+        if self.is_id_component(id) {
+            Some(self.debug_component_name(id)?)
+        } else {
+            Some(u64::from(id).to_smolstr())
+        }
+    }
+
+    pub fn debug_component_name(&self, id: Identifier) -> Option<SmolStr> {
+        use ComponentType as CT;
+        match self.component_type(id).ok()? {
+            CT::RegularComponent | ComponentType::ComponentTag => {
+                Some(self.type_registry().type_ids_data[&id.stripped()].1.clone())
+            }
+            CT::EntityTag => Some(u64::from(id).to_smolstr()),
+            CT::EnumTag => Some("TODO".to_smolstr()),
+            CT::RelationshipComponentTag | CT::MixedRelationshipTag | CT::DataRelationship(_) => {
+                self.relationship_component_name(id)
+            }
+        }
+    }
+
+    pub fn relationship_component_name(&self, id: Identifier) -> Option<SmolStr> {
+        let (Some(relation), Some(target)) = (self.relation_entity(id), self.target_entity(id))
+        else {
+            return None;
+        };
+        Some(format_smolstr!(
+            "({0}, {1})",
+            self.debug_id_name(relation)?,
+            self.debug_id_name(target)?
+        ))
+    }
+
+    pub fn is_id_component(&self, id: Identifier) -> bool {
+        self.has_component(COMPONENT_ID, id)
     }
 
     pub fn component_type(
@@ -663,7 +692,7 @@ impl Archetypes {
         //relationship was created after the component id was set.
         //Conclustion: while comparing components they should be stripped IF they might be parts of
         //a relationship
-        if target.stripped() == self.get_component_id::<EnumTagId>().unwrap().stripped() {
+        if target.stripped() == self.component_id::<EnumTagId>().stripped() {
             return Ok(ComponentType::EnumTag);
         }
         if self
@@ -689,6 +718,8 @@ impl Archetypes {
     //4) Non-data relations
     //5) Data relations (2 variants)
     //6) Enum tags
+    //TODO: add enum tags support, and maaybe introduce named entities which are always present, e.g.
+    //#MainCamera
     pub fn serialize_entity(&self, entity: Identifier) -> Option<String> {
         let registry = self.type_registry.clone();
         let registry_ref = registry.borrow();
@@ -698,37 +729,81 @@ impl Archetypes {
         let components = archetype_ref.components_ids_set_rc().clone();
 
         let mut json_value = serde_json::json!({});
-        let mut tags = serde_json::json!({});
+        let mut tags = serde_json::json!([]);
 
         for component in components.iter().copied() {
-            let serialize = registry_ref.functions.get(&component).unwrap().serialize;
+            use ComponentType as CT;
+            let debug_name = self.debug_id_name(component).unwrap().to_string();
             match self.component_type(component).unwrap() {
-                ComponentType::RegularComponent => {}
-                ComponentType::ComponentTag => {}
-                ComponentType::EntityTag => {}
-                ComponentType::EnumTag => {}
-                ComponentType::RelationshipComponentTag => {}
-                ComponentType::MixedRelationshipTag => {}
-                ComponentType::DataRelationship(_) => {}
+                CT::DataRelationship(data_pos) => {
+                    let serialize = registry_ref.functions.get(&component).unwrap().serialize;
+                    let storage = archetype_ref
+                        .table()
+                        .borrow()
+                        .storage(component)
+                        .unwrap()
+                        .clone();
+                    let storage_mut = storage.borrow_mut();
+                    let component_ptr: *mut u8 =
+                        unsafe { storage_mut.0.get_checked(record.table_row.0).as_ptr() };
+
+                    let component_value =
+                        serialize(unsafe { Ptr::new(NonNull::new(component_ptr).unwrap()) })
+                            .unwrap();
+                    let insertion_pos = match data_pos {
+                        RelationshipDataPosition::First => 1,
+                        RelationshipDataPosition::Second => debug_name.find(',').unwrap() + 2,
+                    };
+                    let debug_name = {
+                        let mut name = debug_name.clone();
+                        name.insert(insertion_pos, '$');
+                        name
+                    };
+                    let _ = json_value
+                        .as_object_mut()
+                        .unwrap()
+                        .insert(debug_name, component_value);
+                }
+                CT::RegularComponent => {
+                    let serialize = registry_ref.functions.get(&component).unwrap().serialize;
+                    let storage = archetype_ref
+                        .table()
+                        .borrow()
+                        .storage(component)
+                        .unwrap()
+                        .clone();
+                    let storage_mut = storage.borrow_mut();
+                    let component_ptr: *mut u8 =
+                        unsafe { storage_mut.0.get_checked(record.table_row.0).as_ptr() };
+
+                    let component_value =
+                        serialize(unsafe { Ptr::new(NonNull::new(component_ptr).unwrap()) })
+                            .unwrap();
+                    let _ = json_value
+                        .as_object_mut()
+                        .unwrap()
+                        .insert(debug_name, component_value);
+                }
+                CT::ComponentTag => tags.as_array_mut().unwrap().push(debug_name.into()),
+                CT::EntityTag => {
+                    //Do nothing, as entity tags are not garanteed to be persent over multiple
+                    //sessions
+                }
+                CT::MixedRelationshipTag => {
+                    //Do nothing for the same reason as above
+                }
+                CT::EnumTag => tags.as_array_mut().unwrap().push("TODO".into()),
+                CT::RelationshipComponentTag => {
+                    tags.as_array_mut().unwrap().push(debug_name.into())
+                }
             }
-            let storage = archetype_ref
-                .table()
-                .borrow()
-                .storage(component)
-                .unwrap()
-                .clone();
-            let storage_mut = storage.borrow_mut();
-            let component_ptr: *mut u8 =
-                unsafe { storage_mut.0.get_checked(record.table_row.0).as_ptr() };
-
-            let component_value =
-                serialize(unsafe { Ptr::new(NonNull::new(component_ptr).unwrap()) }).unwrap();
-            let _ = json_value.as_object_mut().unwrap().insert(
-                registry_ref.type_names[&component.low32()].clone(),
-                component_value,
-            );
         }
-
+        if !tags.as_array().unwrap().is_empty() {
+            json_value
+                .as_object_mut()
+                .unwrap()
+                .insert("Tags".into(), tags);
+        }
         Some(serde_json::to_string_pretty(&json_value).unwrap())
     }
 
@@ -739,11 +814,22 @@ impl Archetypes {
         let record = self.record(entity).unwrap();
         let archetype = self.archetype_by_id(record.arhetype_id).clone();
         let archetype_ref = archetype.borrow();
-        let components = archetype_ref.components_ids_set_rc().clone();
         let mut json_value = serde_json::from_str::<serde_json::Value>(json).unwrap();
-        let json_object = json_value.as_object().unwrap();
-        for (name, value) in json_object {}
-        todo!()
+        let json_object = json_value.as_object_mut().unwrap();
+        for (name, value) in json_object {
+            if name == "Tags" {
+                let tags = value.as_array().unwrap();
+                for tag in tags.iter() {
+                    if let Some(component) = registry_ref
+                        .identifiers_by_names
+                        .get(&tag.as_str().unwrap().to_smolstr())
+                    {
+                        dbg!(component, tag);
+                    }
+                }
+            }
+        }
+        todo!();
         // for component in components.iter().copied() {
         //     let deserialize = registry_ref.functions.get(&component).unwrap().deserialize;
         //     let (new_archetype, _) = self
@@ -987,20 +1073,21 @@ impl Archetypes {
     }
 
     pub fn relationship_name(&self, relationship: Identifier) -> Option<String> {
-        let relation = self.relation_entity(relationship)?;
-        let target = self.target_entity(relationship)?;
-        let registry = self.type_registry();
-        let relation_name = registry
-            .type_names
-            .get(&relation.low32())
-            .map(|n| n.as_str())
-            .unwrap_or("Relation");
-        let target_name = registry
-            .type_names
-            .get(&target.low32())
-            .map(|n| n.as_str())
-            .unwrap_or("Target");
-        format!("({relation_name}, {target_name})").into()
+        todo!()
+        // let relation = self.relation_entity(relationship)?;
+        // let target = self.target_entity(relationship)?;
+        // let registry = self.type_registry();
+        // let relation_name = registry
+        //     .type_names
+        //     .get(&relation.low32())
+        //     .map(|n| n.as_str())
+        //     .unwrap_or("Relation");
+        // let target_name = registry
+        //     .type_names
+        //     .get(&target.low32())
+        //     .map(|n| n.as_str())
+        //     .unwrap_or("Target");
+        // format!("({relation_name}, {target_name})").into()
     }
 
     pub fn debug_print_archetypes(&self) {
@@ -1330,23 +1417,17 @@ impl Archetypes {
         &self.children_pool
     }
 
-    pub fn get_component_id<T: AbstractComponent>(&self) -> Option<Identifier> {
+    pub fn component_id<T: AbstractComponent>(&self) -> Identifier {
         let type_registry = self.type_registry.borrow();
         let type_id = TypeId::of::<T>();
-        type_registry.identifiers.get(&type_id).cloned()
+        type_registry.identifiers.get(&type_id).cloned().unwrap()
     }
 
-    pub fn component_id<T: AbstractComponent>(&mut self) -> Identifier {
+    pub fn register_component<T: AbstractComponent>(&mut self) {
         let type_id = TypeId::of::<T>();
         let type_id_ref = TypeId::of::<&T>();
         let type_id_mut = TypeId::of::<&mut T>();
         let component_name = tynm::type_name::<T>();
-        {
-            let type_registry = self.type_registry.borrow_mut();
-            if let Some(id) = type_registry.identifiers.get(&type_id) {
-                return *id;
-            }
-        };
         let id = self.add_entity(EntityKind::Component(Component {
             size: Some(std::mem::size_of::<T>()),
             is_type: true,
@@ -1370,13 +1451,9 @@ impl Archetypes {
                 },
             );
         }
-        type_registry
-            .type_names
-            .insert(id.low32(), tynm::type_name::<T>());
         if std::mem::size_of::<T>() == 0 {
             type_registry.tags.insert(id.into());
         }
-        id
     }
 
     pub fn add_relationship(
@@ -1516,8 +1593,8 @@ impl Archetypes {
     }
 
     pub fn get_enum_tag<T: EnumTag>(&self, entity: Identifier) -> Option<T> {
-        let enum_tag_id = self.get_component_id::<EnumTagId>().unwrap();
-        let enum_type_id = self.get_component_id::<T>()?;
+        let enum_tag_id = self.component_id::<EnumTagId>();
+        let enum_type_id = self.component_id::<T>();
         let relationship = Archetypes::relationship_id(enum_type_id, enum_tag_id);
         let enum_id = self
             .get_component::<EnumTagId>(relationship, entity)?
@@ -1534,11 +1611,8 @@ impl Archetypes {
     }
 
     pub fn has_enum_tag<T: EnumTag>(&self, variant: T, entity: Identifier) -> bool {
-        let enum_tag_id = self.get_component_id::<EnumTagId>().unwrap();
-        let Some(enum_type_id) = self.get_component_id::<T>() else {
-            return false;
-        };
-
+        let enum_tag_id = self.component_id::<EnumTagId>();
+        let enum_type_id = self.component_id::<T>();
         let relationship = Archetypes::relationship_id(enum_type_id, enum_tag_id);
         let Some(enum_id) = self
             .get_component::<EnumTagId>(relationship, entity)
@@ -1689,7 +1763,7 @@ impl Archetypes {
                 //default archetype, making in inaccessible. Should they be cleared automatically?
                 for component in FindRelationshipsIter::from_component(archetype, component) {
                     //we have already deleting all children
-                    if component.0.low32() == self.get_component_id::<ChildOf>().unwrap().low32() {
+                    if component.0.low32() == self.component_id::<ChildOf>().low32() {
                         break;
                     }
                     operations_pool.push(ArchetypeOperation {
@@ -1718,8 +1792,8 @@ impl Archetypes {
         &self,
         record: &EntityRecord,
     ) -> Option<FindRelationshipsIter> {
-        let relation = self.get_component_id::<R>()?;
-        let target = self.get_component_id::<T>()?;
+        let relation = self.component_id::<R>();
+        let target = self.component_id::<T>();
         let archetype = self.archetype_from_record(record).unwrap();
         Some(FindRelationshipsIter::from_archetype(
             archetype, relation, target,
@@ -1848,12 +1922,7 @@ impl Archetypes {
     ) -> ArchetypeCell {
         let regular_hash = components.regular_hash();
         let table_hash = components.table_hash(self);
-        let archetype: ArchetypeCell = Archetype::new(
-            table.clone().0,
-            components.clone(),
-            self.type_registry.clone(),
-        )
-        .into();
+        let archetype: ArchetypeCell = Archetype::new(table.clone().0, components.clone()).into();
         self.archetypes.push(archetype.clone());
 
         self.add_archetype_by_hash(archetype.clone(), regular_hash);

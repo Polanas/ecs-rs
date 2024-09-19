@@ -1,13 +1,15 @@
-use std::{
-    any::{Any, TypeId},
-    cell::RefCell,
-    rc::Rc,
-};
+use std::{any::TypeId, cell::RefCell, rc::Rc};
 
 use crate::{
-    archetypes::{Archetypes, EntityKind, Prefab, StateOperation, ENTITY_ID}, components::component::AbstractComponent, entity::Entity, events::{self, CurrentSystemTypeId, Event, EventIter, EventReader, Events}, identifier::Identifier, on_change_callbacks::{OnAddCallback, OnRemoveCallback}, plugins::Plugins, query::{QueryData, QueryFilterData, QueryState, WorldQuery}, resources::ResourceQuery, systems::{
-        AbstractSystemsWithStateData, EnumId, StateGetter, SystemStage, SystemState, Systems,
-    }
+    archetypes::{Archetypes, EntityKind, Prefab, StateOperation, ENTITY_ID},
+    components::component::AbstractComponent,
+    entity::Entity,
+    events::{self, CurrentSystemTypeId, Event, EventReader, Events},
+    on_change_callbacks::{OnAddCallback, OnRemoveCallback},
+    plugins::Plugins,
+    query::{QueryData, QueryFilterData, QueryState},
+    resources::ResourceQuery,
+    systems::{AbstractSystemsWithStateData, StateGetter, SystemStage, SystemState, Systems},
 };
 
 pub struct World {
@@ -58,6 +60,10 @@ impl World {
         Self {
             currently_running_systems: false,
         }
+    }
+
+    pub fn deserialize_entity(&self, json: &str) -> Entity {
+        archetypes_mut(|a| a.deserialize_entity(json))
     }
 
     pub fn send_event<T: Event>(&self, event: T) {

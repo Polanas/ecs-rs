@@ -1,6 +1,6 @@
-use std::{any::Any, cell::RefCell, hash::Hash, ops::Deref, rc::Rc, usize};
+use std::{cell::RefCell, hash::Hash, ops::Deref, rc::Rc};
 
-use crate::{archetype::Archetype, borrow_traits::BorrowFn, query::{Query, QueryData, QueryFilterData}, table::Table};
+use crate::{archetype::Archetype, borrow_traits::BorrowFn, table::Table};
 
 #[derive(Clone)]
 pub struct ArchetypeCell(pub Rc<RefCell<Archetype>>);
@@ -8,6 +8,10 @@ pub struct ArchetypeCell(pub Rc<RefCell<Archetype>>);
 impl ArchetypeCell {
     pub fn len(&self) -> usize {
         self.0.borrow_fn(|a| a.len())
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
     }
 }
 

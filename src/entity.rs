@@ -1,5 +1,7 @@
 pub use std::{fmt::Debug, hash::Hash, os::unix::process::parent_id};
 
+use smol_str::SmolStr;
+
 use crate::{
     archetypes::{
         self, Archetypes, ComponentGetter, EntityNameGetter, EntityRecord, InstanceOf, NameLeft,
@@ -81,9 +83,14 @@ impl Entity {
     pub fn serialize(&self) -> Option<String> {
         archetypes(|archetypes| archetypes.serialize_entity(self.0))
     }
+
+    pub fn debug_name(&self) -> SmolStr {
+        archetypes(|archetypes| archetypes.debug_id_name(self.0).unwrap())
+    }
+
     pub fn name_parent(&self) -> Entity {
-        if let Some(parent) = self.find_rel::<ChildOf, Wildcard>() {
-            parent.0.into()
+        if let Some(parent) = self.parent() {
+            parent
         } else {
             WILDCARD
         }
@@ -151,7 +158,7 @@ impl Entity {
         archetypes(|archetypes| {
             let record = archetypes.record(self.0).unwrap();
             let archetype = archetypes.archetype_from_record(&record).unwrap();
-            RelationshipsIter::new(archetype, record.archetype_row)
+            RelationshipsIter::new(archetype)
         })
     }
     pub fn has_relationship(&self, relationship: Relationship) -> bool {
@@ -660,12 +667,14 @@ mod tests {
 
     use archetypes::{Wildcard, ENTITY_ID};
     use bevy_reflect::{DynamicStruct, FromReflect, Reflect, Struct};
+    use regex::Regex;
+    use serde_json::json;
 
     use crate::components::test_components::{
         Apples, Begin, End, IsCool, Likes, Name, Oranges, Owes, Position, Velocity,
     };
     use crate::plugins::Plugin;
-    use crate::systems::{AbstractSystemsWithStateData, States};
+    use crate::systems::States;
     use crate::{component_bundle, enum_tag, impl_system, impl_system_states};
     use crate::{
         query::QueryComoponentId,
@@ -1697,7 +1706,29 @@ mod tests {
         let some_values = SomeValues::from_reflect(&dynamic_struct);
         dbg!(some_values);
     }
-
+    #[test]
+    fn deserialization() {
+        let json = json!(
+        {
+            "($Owes, Apples)": {
+                "amount": 10
+            },
+            "(Begin, $Position)": {
+                "x": 2,
+                "y": 3
+            },
+            "Position": {
+                "x": 1,
+                "y": 2
+            },
+            "Tags": [
+                "IsCool",
+                "(Likes, Apples)"
+            ]
+        });
+        let world = World::new();
+        let entity = world.deserialize_entity(&json.to_string());
+    }
     #[test]
     fn serialization() {
         enum_tag! {
@@ -1708,14 +1739,13 @@ mod tests {
         }
 
         let world = World::new();
-        let entity_tag = world.add_entity();
+        let entity_tag = world.add_entity_named("A tag");
         let child = world.add_entity();
         let entity = world
             .add_entity()
             .add_comp(Position::new(1, 2))
             .add_tag::<IsCool>()
             .add_ent_tag(entity_tag)
-            .add_enum_tag(MyEnumTag::StateOne)
             .add_rel::<Likes, Apples>()
             .add_child_of(child)
             .add_rel_first::<Owes, Apples>(Owes { amount: 10 })
@@ -1723,6 +1753,28 @@ mod tests {
             .serialize()
             .unwrap();
         println!("{entity}");
+    }
+
+    #[test]
+    fn debug_name() {
+        let world = World::new();
+        let entity = world.add_entity_named("entity");
+        assert_eq!("entity", entity.debug_name());
+        let parent = world.add_entity();
+        entity.add_child_of(parent);
+        assert_eq!("entity", entity.debug_name());
+        entity.set_name("other name");
+        assert_eq!("other name", entity.debug_name());
+        entity.remove_child_of(parent);
+        assert_eq!("other name", entity.debug_name());
+        entity.remove_name();
+        dbg!(entity.debug_name());
+    }
+
+    #[test]
+    fn regex_test() {
+        let regex = Regex::new("[A-Za-z]{3}").unwrap();
+        assert!(regex.is_match("ABc"));
     }
 }
 

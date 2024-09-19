@@ -3,7 +3,7 @@ use std::{collections::BTreeSet, rc::Rc};
 use crate::{
     archetype::ArchetypeRow,
     archetypes::{Archetypes, WILDCARD_32, WILDCARD_RELATIONSHIP},
-    components::component::{ChildOf, AbstractComponent},
+    components::component::{AbstractComponent, ChildOf},
     entity::Entity,
     identifier::Identifier,
     world::{archetypes, archetypes_mut},
@@ -62,12 +62,11 @@ impl Relationship {
 #[derive()]
 pub struct RelationshipsIter {
     components: Vec<Identifier>,
-    row: ArchetypeRow,
     index: usize,
 }
 
 impl RelationshipsIter {
-    pub fn new(archetype: &ArchetypeCell, row: ArchetypeRow) -> Self {
+    pub fn new(archetype: &ArchetypeCell) -> Self {
         Self {
             components: archetype
                 .borrow()
@@ -75,7 +74,6 @@ impl RelationshipsIter {
                 .iter()
                 .cloned()
                 .collect(),
-            row,
             index: 0,
         }
     }

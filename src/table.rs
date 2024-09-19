@@ -8,7 +8,7 @@ use std::{
 
 use bevy_ptr::{OwningPtr, Ptr, PtrMut};
 
-use bevy_utils::{dbg, HashMap};
+use bevy_utils::HashMap;
 
 use crate::{
     archetype::{Archetype, ArchetypeAdd, ArchetypeRow},
@@ -34,7 +34,7 @@ impl From<usize> for TableRow {
 pub struct TableId(pub usize);
 
 thread_local! {
-    static TABLE_ID: Cell<usize> = Cell::new(0);
+    static TABLE_ID: Cell<usize> = const { Cell::new(0) };
 }
 
 fn table_id() -> TableId {
@@ -290,34 +290,35 @@ impl Table {
             .cloned()
     }
 
-    pub fn debug_print(&self, archetypes: &Archetypes) {
-        println!("Table {:?} {{", self.id.0);
-        let registry = self.registry.borrow();
-        for component in self.components.iter() {
-            let type_name = if let (Some(relation), Some(target)) = (
-                archetypes.relation_entity(*component),
-                archetypes.target_entity(*component),
-            ) {
-                let relation_name = registry
-                    .type_names
-                    .get(&relation.low32())
-                    .map(|n| n.as_str())
-                    .unwrap_or("Relation");
-                let target_name = registry
-                    .type_names
-                    .get(&target.low32())
-                    .map(|n| n.as_str())
-                    .unwrap_or("Target");
-                &format!("({relation_name}, {target_name})")
-            } else if let Some(name) = registry.type_names.get(&component.low32()) {
-                name
-            } else {
-                "No name"
-            };
-            println!("    {},", type_name);
-        }
-        // println!("    hash: {},", self.components.table_hash(archetypes));
-        println!("    len: {}\n}}", self.count);
+    pub fn debug_print(&self, _archetypes: &Archetypes) {
+        todo!()
+        // println!("Table {:?} {{", self.id.0);
+        // let registry = self.registry.borrow();
+        // for component in self.components.iter() {
+        //     let type_name = if let (Some(relation), Some(target)) = (
+        //         archetypes.relation_entity(*component),
+        //         archetypes.target_entity(*component),
+        //     ) {
+        //         let relation_name = registry
+        //             .type_names
+        //             .get(&relation.low32())
+        //             .map(|n| n.as_str())
+        //             .unwrap_or("Relation");
+        //         let target_name = registry
+        //             .type_names
+        //             .get(&target.low32())
+        //             .map(|n| n.as_str())
+        //             .unwrap_or("Target");
+        //         &format!("({relation_name}, {target_name})")
+        //     } else if let Some(name) = registry.type_names.get(&component.low32()) {
+        //         name
+        //     } else {
+        //         "No name"
+        //     };
+        //     println!("    {},", type_name);
+        // }
+        // // println!("    hash: {},", self.components.table_hash(archetypes));
+        // println!("    len: {}\n}}", self.count);
     }
 }
 

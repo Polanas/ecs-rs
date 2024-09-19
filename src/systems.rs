@@ -1,12 +1,12 @@
 use std::{
     any::{Any, TypeId},
-    cell::{Cell, Ref, RefCell},
+    cell::{Cell, RefCell},
     marker::PhantomData,
     rc::Rc,
 };
 
 use bevy_reflect::Reflect;
-use bevy_utils::{hashbrown::HashMap, HashSet};
+use bevy_utils::hashbrown::HashMap;
 use serde::{Deserialize, Serialize};
 
 use crate::{events::CurrentSystemTypeId, world::World};
@@ -584,6 +584,7 @@ impl<T: 'static> StateGetter<T> {
     }
 }
 pub struct States {
+    #[allow(dead_code)]
     states: Rc<RefCell<StatesMap>>,
 }
 

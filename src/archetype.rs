@@ -1,22 +1,16 @@
+use bevy_ptr::OwningPtr;
+use bevy_utils::HashMap;
 use std::{
     cell::{Cell, RefCell},
     collections::BTreeSet,
     hash::Hash,
     rc::Rc,
 };
-use bevy_ptr::{OwningPtr, Ptr};
-use bevy_utils::HashMap;
-use smol_str::ToSmolStr;
 
 use crate::{
-    archetypes::{
-        Archetypes, MyTypeRegistry, NameLeft, COMPONENT_CAPACITY, COMPONENT_ID, ENTITY_ID,
-        WILDCARD_25, WILDCARD_32,
-    },
-    entity::Entity,
+    archetypes::{Archetypes, COMPONENT_CAPACITY},
     identifier::Identifier,
     table::{StorageCell, Table, TableRow},
-    world::archetypes,
 };
 
 #[derive(Debug)]
@@ -76,15 +70,10 @@ pub struct Archetype {
     components: Rc<BTreeSet<Identifier>>,
     components_vec: Vec<Identifier>,
     count: usize,
-    registry: Rc<RefCell<MyTypeRegistry>>,
 }
 
 impl Archetype {
-    pub fn new(
-        table: Rc<RefCell<Table>>,
-        components: BTreeSet<Identifier>,
-        registry: Rc<RefCell<MyTypeRegistry>>,
-    ) -> Self {
+    pub fn new(table: Rc<RefCell<Table>>, components: BTreeSet<Identifier>) -> Self {
         let id = archetype_id();
         let mut entities = vec![];
         entities.reserve_exact(COMPONENT_CAPACITY);
@@ -97,7 +86,6 @@ impl Archetype {
             table,
             id,
             count: 0,
-            registry,
         }
     }
 
@@ -180,49 +168,50 @@ impl Archetype {
         });
     }
 
-    pub fn debug_print(&self, archetypes: &Archetypes) {
-        println!("Archetype {:?} {{", self.id.0);
-        let registry = self.registry.borrow();
-        for component in self.components.iter() {
-            if *component == ENTITY_ID {
-                println!("    Entity,");
-                continue;
-            } else if *component == COMPONENT_ID {
-                println!("    Component,");
-                continue;
-            }
-            if let Some(name) = archetypes.debug_id_name(*component) {
-                println!("    {name},");
-                continue;
-            }
-            let type_name = if let (Some(relation), Some(target)) = (
-                archetypes.relation_entity(*component),
-                archetypes.target_entity(*component),
-            ) {
-                let relation_name = archetypes.debug_id_name(relation).unwrap_or_else(|| {
-                    registry
-                        .type_names
-                        .get(&relation.low32())
-                        .map(|s| s.to_smolstr())
-                        .unwrap_or("Relation".to_smolstr())
-                });
-                let target_name = archetypes.debug_id_name(target).unwrap_or_else(|| {
-                    registry
-                        .type_names
-                        .get(&target.low32())
-                        .map(|s| s.to_smolstr())
-                        .unwrap_or("Target".to_smolstr())
-                });
-                &format!("({relation_name}, {target_name})")
-            } else if let Some(name) = registry.type_names.get(&component.low32()) {
-                name
-            } else {
-                "No name"
-            };
-            println!("    {},", type_name);
-        }
-        // println!("    hash: {},", self.components.regular_hash());
-        println!("    len: {}\n}}", self.count);
+    pub fn debug_print(&self, _archetypes: &Archetypes) {
+        todo!()
+        // println!("Archetype {:?} {{", self.id.0);
+        // let registry = self.registry.borrow();
+        // for component in self.components.iter() {
+        //     if *component == ENTITY_ID {
+        //         println!("    Entity,");
+        //         continue;
+        //     } else if *component == COMPONENT_ID {
+        //         println!("    Component,");
+        //         continue;
+        //     }
+        //     if let Some(name) = archetypes.debug_id_name(*component) {
+        //         println!("    {name},");
+        //         continue;
+        //     }
+        //     let type_name = if let (Some(relation), Some(target)) = (
+        //         archetypes.relation_entity(*component),
+        //         archetypes.target_entity(*component),
+        //     ) {
+        //         let relation_name = archetypes.debug_id_name(relation).unwrap_or_else(|| {
+        //             registry
+        //                 .type_names
+        //                 .get(&relation.low32())
+        //                 .map(|s| s.to_smolstr())
+        //                 .unwrap_or("Relation".to_smolstr())
+        //         });
+        //         let target_name = archetypes.debug_id_name(target).unwrap_or_else(|| {
+        //             registry
+        //                 .type_names
+        //                 .get(&target.low32())
+        //                 .map(|s| s.to_smolstr())
+        //                 .unwrap_or("Target".to_smolstr())
+        //         });
+        //         &format!("({relation_name}, {target_name})")
+        //     } else if let Some(name) = registry.type_names.get(&component.low32()) {
+        //         name
+        //     } else {
+        //         "No name"
+        //     };
+        //     println!("    {},", type_name);
+        // }
+        // // println!("    hash: {},", self.components.regular_hash());
+        // println!("    len: {}\n}}", self.count);
     }
 
     pub fn storages<T: 'static>(&self) -> Option<StorageCell> {

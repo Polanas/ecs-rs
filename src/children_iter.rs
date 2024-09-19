@@ -1,7 +1,8 @@
 use std::{cell::RefCell, rc::Rc};
 
 use crate::{
-    archetypes::Archetypes, components::component::ChildOf, entity::Entity, identifier::Identifier, world::{self, archetypes, archetypes_mut}
+    archetypes::Archetypes, components::component::ChildOf, entity::Entity, identifier::Identifier,
+    world::archetypes,
 };
 
 pub struct ChildrenRecursiveIter {
@@ -43,7 +44,7 @@ pub fn get_children_recursive(
     children: &mut Vec<(Entity, Depth)>,
     depth: Depth,
 ) {
-    let relation = archetypes.get_component_id::<ChildOf>().unwrap();
+    let relation = archetypes.component_id::<ChildOf>();
     let relationship = Archetypes::relationship_id(relation, entity);
     let Some(archetypes_set) = archetypes.get_archetypes_with_id(relationship) else {
         return;

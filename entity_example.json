@@ -6,9 +6,7 @@
     },
     "Tags": [
         "ATypeTag",
-        "CustomTag"
-    ],
-    "Relationships": [
+        "CustomTag",
         "(Likes, Apples)"
     ],
     "(Start, $Velocity)": {
