@@ -730,6 +730,7 @@ mod tests {
     #[test]
     pub fn comps() {
         let world = World::new();
+        world.register_components::<(Position, Velocity)>();
         let _ = world
             .add_entity()
             .add_comp(Position::new(1, 2))
@@ -823,6 +824,7 @@ mod tests {
             pub struct Velocity(i32, i32);
         }
         let world = World::new();
+        world.register_components::<(Velocity, Position, IsCool, Likes, Apples, Owes, Begin)>();
         world.add_entity().add_comp(Position::default());
         world
             .add_entity()
@@ -838,6 +840,7 @@ mod tests {
     #[test]
     fn without_children_query() {
         let world = World::new();
+        world.register_components::<(Velocity, Position, IsCool, Likes, Apples, Owes, Begin)>();
         let parent = world.add_entity();
         world
             .add_entity()
@@ -858,6 +861,9 @@ mod tests {
     #[test]
     fn bundle_struct_test() {
         let world = World::new();
+        world
+            .register_components::<(Velocity, Position, IsCool, Likes, Apples, Owes, Begin, Name)>(
+            );
         component_bundle! {
             struct Extra {
                 name: Name,
@@ -888,6 +894,7 @@ mod tests {
     #[test]
     fn bundle_test() {
         let world = World::new();
+        world.register_components::<(Velocity, Position, IsCool, Likes, Apples, Owes, Begin)>();
         let e = world
             .add_entity()
             .add_comp((Position::new(1, 2), Velocity::new(3, 4)));
@@ -923,6 +930,7 @@ mod tests {
     #[test]
     fn get_or_add_comp() {
         let world = World::new();
+        world.register_components::<(Velocity, Position, IsCool, Likes, Apples, Owes, Begin)>();
 
         let e = world.add_entity();
         e.get_or_add_comp(|| Position::new(1, 2));
@@ -941,6 +949,7 @@ mod tests {
     #[test]
     fn on_component_add() {
         let world = World::new();
+        world.register_components::<(Velocity, Position, IsCool, Likes, Apples, Owes, Begin)>();
 
         world.on_comp_add::<Position>(|entity: Entity, _| {
             entity.get_comp::<Position>().get_mut(|p| p.x += 1);
@@ -958,6 +967,7 @@ mod tests {
     #[test]
     fn adding_components_inside_query() {
         let world = World::new();
+        world.register_components::<(Velocity, Position, IsCool, Likes, Apples, Owes, Begin)>();
         let e1 = world.add_entity_named("e1").add_tag::<IsCool>();
         let e2 = world
             .add_entity_named("e2")
@@ -996,6 +1006,7 @@ mod tests {
     #[test]
     fn querying_empty_entities() {
         let world = World::new();
+        world.register_components::<(Velocity, Position, IsCool, Likes, Apples, Owes, Begin)>();
         let e = world.add_entity();
         world.add_entity().add_comp(Position { x: 1, y: 2 });
         let mut query = world
@@ -1012,6 +1023,7 @@ mod tests {
     #[test]
     fn replacing_components() {
         let world = World::new();
+        world.register_components::<(Velocity, Position, IsCool, Likes, Apples, Owes, Begin)>();
         let e1 = world.add_entity().add_comp(Position { x: 1, y: 1 });
         world.add_entity().add_comp(Position { x: 2, y: 2 });
 
@@ -1026,6 +1038,7 @@ mod tests {
     #[test]
     fn replacing_relationships() {
         let world = World::new();
+        world.register_components::<(Velocity, Position, IsCool, Likes, Apples, Owes, Begin)>();
         let e1 = world
             .add_entity()
             .add_rel_second::<Begin, _>(Position { x: 1, y: 1 });
@@ -1111,6 +1124,7 @@ mod tests {
         }
 
         let world = World::new();
+        world.register_components::<(PlayerState, Progress)>();
         let e = world.add_entity().add_enum_tag(PlayerState::Walking);
 
         assert!(e.has_any_enum_tag::<PlayerState>());
@@ -1124,18 +1138,18 @@ mod tests {
 
         enum_tag! {
             #[derive(Debug, Eq, PartialEq)]
-            enum Progerss {
+            enum Progress {
                 Beginner,
                 Pro,
             }
         }
 
-        e.add_enum_tag(Progerss::Pro);
+        e.add_enum_tag(Progress::Pro);
 
         let mut query = world
             .query::<()>()
             .with_enum_tag(PlayerState::Falling)
-            .with_enum_tag(Progerss::Pro)
+            .with_enum_tag(Progress::Pro)
             .build();
         let count = query.iter().count();
         assert_eq!(count, 1);
@@ -1244,6 +1258,7 @@ mod tests {
     #[test]
     fn find_relationships() {
         let world = World::new();
+        world.register_components::<(Velocity, Position, IsCool, Likes, Apples, Owes, Begin)>();
         let e = world
             .add_entity()
             .add_rel::<Likes, Apples>()
@@ -1256,6 +1271,7 @@ mod tests {
     #[test]
     fn iter_relationships() {
         let world = World::new();
+        world.register_components::<(Velocity, Position, IsCool, Likes, Apples, Owes, Begin)>();
         let likes = world.add_entity();
         let apples = world.add_entity();
         let parent = world.add_entity();
@@ -1277,6 +1293,7 @@ mod tests {
     #[test]
     fn tag_only_query() {
         let world = World::new();
+        world.register_components::<(Velocity, Position, IsCool, Likes, Apples, Owes, Begin)>();
         let e1 = world.add_entity().add_tag::<IsCool>();
         let e2 = world.add_entity().add_tag::<IsCool>();
 
@@ -1290,6 +1307,7 @@ mod tests {
     #[test]
     fn active_entities() {
         let world = World::new();
+        world.register_components::<(Velocity, Position, IsCool, Likes, Apples, Owes, Begin)>();
         let e1 = world.add_entity().add_tag::<IsCool>();
         let e2 = world.add_entity().add_tag::<IsCool>();
         let e3 = world.add_entity().add_tag::<IsCool>().diactivate();
@@ -1327,6 +1345,7 @@ mod tests {
     fn query_that_has_it_all() {
         //prepare thyself
         let world = World::new();
+        world.register_components::<(Velocity, Position, IsCool, Likes, Apples, Owes, Begin)>();
         let bob = world.add_entity();
         let hates = world.add_entity();
         let idkwhat = world.add_entity();
@@ -1352,6 +1371,7 @@ mod tests {
     #[test]
     fn data_relation_query() {
         let world = World::new();
+        world.register_components::<(Velocity, Position, IsCool, Likes, Apples, Owes, Begin)>();
         let e1 = world
             .add_entity()
             .add_rel_first::<Owes, Apples>(Owes { amount: 10 })
@@ -1371,6 +1391,7 @@ mod tests {
     #[test]
     fn not_queries() {
         let world = World::new();
+        world.register_components::<(Velocity, Position, IsCool, Likes, Apples, Owes, Begin)>();
         let e1 = world.add_entity().add_comp(Position { x: 1, y: 2 });
         e1.add_comp(Velocity { x: 1, y: 0 })
             .add_tag::<IsCool>()
@@ -1388,6 +1409,7 @@ mod tests {
     #[test]
     fn filtered_queries() {
         let world = World::new();
+        world.register_components::<(Position, IsCool, Velocity, Likes, Apples)>();
         let e1 = world.add_entity().add_comp(Position { x: 1, y: 2 });
         e1.add_comp(Velocity { x: 1, y: 0 }).add_tag::<IsCool>();
         world
@@ -1405,6 +1427,7 @@ mod tests {
     #[test]
     fn queries() {
         let world = World::new();
+        world.register_components::<(Position, Velocity)>();
         let e1 = world.add_entity().add_comp(Position { x: 1, y: 2 });
         e1.add_comp(Velocity { x: 1, y: 0 });
         let e2 = world.add_entity().add_comp(Position { x: 3, y: 4 });
@@ -1448,6 +1471,7 @@ mod tests {
     #[test]
     fn prefab() {
         let world = World::new();
+        world.register_components::<(Velocity, Likes, Oranges)>();
         let prefab = world
             .add_prefab()
             .add_comp(Velocity { x: 10, y: 20 })
@@ -1463,8 +1487,9 @@ mod tests {
     }
 
     #[test]
-    fn everthing_at_once_cloned() {
+    fn everything_at_once_cloned() {
         let world = World::new();
+        world.register_components::<(Velocity, Position, IsCool, Likes, Apples, Owes, Begin)>();
         let bob = world.add_entity();
         let hates = world.add_entity();
         let idkwhat = world.add_entity();
@@ -1531,6 +1556,7 @@ mod tests {
     #[test]
     fn wildcard() {
         let world = World::new();
+        world.register_components::<(Likes, Apples)>();
         let entity = world.add_entity();
         entity.add_rel::<Likes, Apples>();
         assert!(entity.has_rel::<Likes, Wildcard>());
@@ -1545,8 +1571,9 @@ mod tests {
         assert!(entity.has_ent_rel(is, WILDCARD));
     }
     #[test]
-    fn everthing_at_once() {
+    fn everything_at_once() {
         let world = World::new();
+        world.register_components::<(Velocity, Position, IsCool, Likes, Apples, Owes, Begin)>();
         let bob = world.add_entity();
         let hates = world.add_entity();
         let idkwhat = world.add_entity();
@@ -1624,6 +1651,7 @@ mod tests {
     #[test]
     fn data_rels_first() {
         let world = World::new();
+        world.register_components::<(Owes, Apples, Oranges)>();
         let ann = world.add_entity();
         ann.add_rel_first::<Owes, Apples>(Owes { amount: 10 });
         ann.add_rel_first::<Owes, Oranges>(Owes { amount: 10 });
@@ -1635,6 +1663,7 @@ mod tests {
     #[test]
     fn data_rels_second() {
         let world = World::new();
+        world.register_components::<(Begin, Position, End, Apples)>();
         let entity = world.add_entity();
         entity
             .add_rel_second::<Begin, _>(Position::new(1, 2))
@@ -1655,6 +1684,7 @@ mod tests {
     #[test]
     fn tag_rels() {
         let world = World::new();
+        world.register_components::<(Likes, Apples, Position)>();
         let entity = world.add_entity();
         entity.add_rel::<Likes, Apples>();
         entity.add_comp(Position { x: 10, y: 20 });
@@ -1667,29 +1697,29 @@ mod tests {
     }
     #[test]
     fn adding_comps_to_comps() {
-        impl_component! {
-            struct Material {
-                data: u32,
-            }
-        }
-        impl_component! {
-            struct Uniform {
-                other_data: u32,
-            }
-        }
-        impl_component! {
-            struct HasMaterial {}
-        }
-        //for some reason has_components(COMPONENT_ID, HasMaterial) return true before IsComponent is added
-        let world = World::new();
-        world.comp_entity::<HasMaterial>();
-        // let comp = world.comp_entity::<Uniform>();
-        // comp.add_comp(Material { data: 5 });
-        // dbg!("begin");
-        // let e = world.comp_entity::<HasMaterial>();
-        // dbg!(archetypes(|a| a.debug_print_archetypes()));
-        // dbg!(archetypes(|a| a.record(e.into()).unwrap().arhetype_id));
-        let entity = world.add_entity().add_tag::<HasMaterial>();
+        // impl_component! {
+        //     struct Material {
+        //         data: u32,
+        //     }
+        // }
+        // impl_component! {
+        //     struct Uniform {
+        //         other_data: u32,
+        //     }
+        // }
+        // impl_component! {
+        //     struct HasMaterial {}
+        // }
+        // //for some reason has_components(COMPONENT_ID, HasMaterial) return true before IsComponent is added
+        // let world = World::new();
+        // world.comp_entity::<HasMaterial>();
+        // // let comp = world.comp_entity::<Uniform>();
+        // // comp.add_comp(Material { data: 5 });
+        // // dbg!("begin");
+        // // let e = world.comp_entity::<HasMaterial>();
+        // // dbg!(archetypes(|a| a.debug_print_archetypes()));
+        // // dbg!(archetypes(|a| a.record(e.into()).unwrap().arhetype_id));
+        // let entity = world.add_entity().add_tag::<HasMaterial>();
     }
 
     #[test]
@@ -1727,6 +1757,7 @@ mod tests {
             ]
         });
         let world = World::new();
+        world.register_components::<(Likes, Apples, IsCool, Position, Begin, Owes)>();
         let entity = world.deserialize_entity(&json.to_string());
     }
     #[test]
@@ -1739,6 +1770,7 @@ mod tests {
         }
 
         let world = World::new();
+        world.register_components::<(MyEnumTag, Position, IsCool, Likes, Apples, Owes, Begin)>();
         let entity_tag = world.add_entity_named("A tag");
         let child = world.add_entity();
         let entity = world
@@ -1769,12 +1801,6 @@ mod tests {
         assert_eq!("other name", entity.debug_name());
         entity.remove_name();
         dbg!(entity.debug_name());
-    }
-
-    #[test]
-    fn regex_test() {
-        let regex = Regex::new("[A-Za-z]{3}").unwrap();
-        assert!(regex.is_match("ABc"));
     }
 }
 

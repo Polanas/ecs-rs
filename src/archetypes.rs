@@ -429,12 +429,6 @@ pub struct Archetypes {
     state_operations: Rc<RefCell<Vec<StateOperation>>>,
 }
 
-// impl Drop for Archetypes {
-//     fn drop(&mut self) {
-//         panic!("Dropping archetypes!");
-//     }
-// }
-
 impl Archetypes {
     pub fn new() -> Self {
         let mut archetypes = Self {
@@ -481,9 +475,10 @@ impl Archetypes {
         )
         .into();
         archetypes.add_archetype(&table, &entity_archetype_components);
-        archetypes.component_id::<InstanceOf>();
-        archetypes.component_id::<EnumTagId>();
-        archetypes.component_id::<ChildOf>();
+        archetypes.register_component::<InstanceOf>();
+        archetypes.register_component::<EnumTagId>();
+        archetypes.register_component::<ChildOf>();
+        archetypes.register_component::<Prefab>();
         archetypes
     }
 
@@ -820,12 +815,13 @@ impl Archetypes {
             if name == "Tags" {
                 let tags = value.as_array().unwrap();
                 for tag in tags.iter() {
-                    if let Some(component) = registry_ref
+                    if let Some(tag) = registry_ref
                         .identifiers_by_names
                         .get(&tag.as_str().unwrap().to_smolstr())
                     {
-                        dbg!(component, tag);
+                        self.add_entity_tag(entity, *tag).unwrap();
                     }
+
                 }
             }
         }
@@ -1420,7 +1416,15 @@ impl Archetypes {
     pub fn component_id<T: AbstractComponent>(&self) -> Identifier {
         let type_registry = self.type_registry.borrow();
         let type_id = TypeId::of::<T>();
-        type_registry.identifiers.get(&type_id).cloned().unwrap()
+        type_registry
+            .identifiers
+            .get(&type_id)
+            .copied()
+            .unwrap_or_else(|| {
+                panic!("expected component {0} to be initialized", {
+                    tynm::type_name::<T>()
+                })
+            })
     }
 
     pub fn register_component<T: AbstractComponent>(&mut self) {

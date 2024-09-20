@@ -2,7 +2,7 @@ use std::{any::TypeId, cell::RefCell, rc::Rc};
 
 use crate::{
     archetypes::{Archetypes, EntityKind, Prefab, StateOperation, ENTITY_ID},
-    components::component::AbstractComponent,
+    components::{component::AbstractComponent, register::RegisterComponentQuery},
     entity::Entity,
     events::{self, CurrentSystemTypeId, Event, EventReader, Events},
     on_change_callbacks::{OnAddCallback, OnRemoveCallback},
@@ -60,6 +60,10 @@ impl World {
         Self {
             currently_running_systems: false,
         }
+    }
+
+    pub fn register_components<T: RegisterComponentQuery>(&self) {
+        T::register();
     }
 
     pub fn deserialize_entity(&self, json: &str) -> Entity {

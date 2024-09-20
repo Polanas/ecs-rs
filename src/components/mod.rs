@@ -1,4 +1,5 @@
 pub mod component_bundle;
+pub mod register;
 pub mod component_query;
 pub mod component_hash;
 pub mod temp_components;

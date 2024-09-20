@@ -2,6 +2,8 @@ pub mod query_structs;
 pub mod plugins;
 pub mod on_change_callbacks;
 #[macro_use]
+pub mod impl_tuple_helper;
+#[macro_use]
 pub mod components;
 pub mod assets;
 pub mod systems;
