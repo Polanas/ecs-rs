@@ -196,9 +196,6 @@ macro_rules! enum_tag {
         }
     };
 }
-impl_component! {
-    pub struct ChildOf {}
-}
 pub trait AbstractComponent: 'static + Sized {
     fn clone_into(value: Ptr<'_>, storage: RefMut<Storage>);
     fn as_reflect_ref(value: bevy_ptr::Ptr<'_>, f: &dyn Fn(Option<&dyn Reflect>));

@@ -9,7 +9,7 @@ use std::{
 
 use packed_struct::PackedStruct;
 
-use crate::entity::Entity;
+use crate::{archetypes::ChildOf, entity::Entity};
 use crate::identifier::IdentifierUnpacked;
 use crate::world::archetypes;
 pub use crate::{
@@ -28,7 +28,6 @@ use crate::{
     archetypes::{Archetypes, EnumTagId, Prefab},
     entity::WILDCARD,
 };
-use crate::{components::component::ChildOf, relationship};
 #[derive(Debug, Clone, Copy, Default)]
 pub enum FilterMaskHint {
     #[default]

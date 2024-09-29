@@ -21,11 +21,14 @@ use crate::{
     archetype::{Archetype, ArchetypeAdd, ArchetypeId, ArchetypeRow},
     children_iter::{self, ChildrenRecursiveIterRef, Depth},
     components::{
-        component::{AbstractComponent, ChildOf, EnumTag},
+        component::{AbstractComponent, EnumTag},
         component_hash::ComponentsHash,
         temp_components::TempComponentsStorage,
+        test_components::{Apples, Owes},
     },
     entity::{Entity, WILDCARD},
+    entity_parser::{self, EntityParser, IdOrName, ParseError, ParsedEntityItem, TagType},
+    expect_fn::ExpectFnOption,
     filter_mask::FilterMask,
     identifier::{Identifier, IdentifierHigh32, IdentifierUnpacked, WildcardKind},
     on_change_callbacks::{OnAddCallback, OnChangeCallbacks, OnRemoveCallback},
@@ -46,6 +49,19 @@ pub const WILDCARD_25: u32 = u32::MAX >> 7;
 pub const ENTITIES_START_CAPACITY: usize = 512;
 //max low32, max high32, is_relationship
 pub const WILDCARD_RELATIONSHIP: Identifier = Identifier([255, 255, 255, 255, 255, 255, 255, 129]);
+
+#[derive(Debug, Clone, Copy)]
+pub enum RelDataPosition {
+    First,
+    Second,
+}
+#[derive(Debug, Clone, Error)]
+pub enum GetComponentError {
+    #[error("expected entity {0} to be alive")]
+    EntityNotAlive(SmolStr),
+    #[error("expected entity {0} to have the component {1}")]
+    NoComponent(SmolStr, SmolStr),
+}
 
 #[derive(Debug, Clone, Error)]
 pub enum ComponentTypeError {
@@ -97,20 +113,8 @@ pub struct StrippedIdentifier(Identifier);
 
 impl From<Identifier> for StrippedIdentifier {
     fn from(value: Identifier) -> Self {
-        let unpacked = value.unpack();
-        Self(
-            IdentifierUnpacked {
-                low32: unpacked.low32,
-                high32: IdentifierHigh32 {
-                    second: unpacked.high32.second,
-                    is_relationship: unpacked.high32.is_relationship,
-                    ..Default::default()
-                },
-            }
-            .pack()
-            .unwrap()
-            .into(),
-        )
+        let value = u64::from(value) & 0xFFFFFFFFFFFFFF81;
+        Self(Identifier(u64::to_be_bytes(value)))
     }
 }
 
@@ -119,27 +123,27 @@ impl StrippedIdentifier {
         self.0.low32()
     }
 }
-type CloneFn = fn(Ptr<'_>, RefMut<Storage>);
-type SerializeFn = fn(Ptr<'_>) -> serde_json::Result<serde_json::Value>;
-type DeserializeFn = fn(serde_json::Value, RefMut<Storage>) -> serde_json::Result<()>;
-type AsReflectRefFn = fn(Ptr<'_>, f: &dyn Fn(Option<&dyn Reflect>));
-type AsReflectMutFn = fn(PtrMut<'_>, f: &dyn Fn(Option<&mut dyn Reflect>));
+pub type CloneFn = fn(Ptr<'_>, RefMut<Storage>);
+pub type SerializeFn = fn(Ptr<'_>) -> serde_json::Result<serde_json::Value>;
+pub type DeserializeFn = fn(serde_json::Value, RefMut<Storage>) -> serde_json::Result<()>;
+pub type AsReflectRefFn = fn(Ptr<'_>, f: &dyn Fn(Option<&dyn Reflect>));
+pub type AsReflectMutFn = fn(PtrMut<'_>, f: &dyn Fn(Option<&mut dyn Reflect>));
 
+#[derive(Clone)]
 pub struct Functions {
-    clone: CloneFn,
-    serialize: SerializeFn,
-    deserialize: DeserializeFn,
-    as_reflect_ref: AsReflectRefFn,
-    as_reflect_mut: AsReflectMutFn,
+    pub clone: CloneFn,
+    pub serialize: SerializeFn,
+    pub deserialize: DeserializeFn,
+    pub as_reflect_ref: AsReflectRefFn,
+    pub as_reflect_mut: AsReflectMutFn,
 }
 
 pub struct MyTypeRegistry {
     pub layouts: HashMap<StrippedIdentifier, Layout>,
-    pub functions: HashMap<Identifier, Functions>,
+    pub functions: HashMap<StrippedIdentifier, Functions>,
     pub type_ids_data: HashMap<StrippedIdentifier, (TypeId, SmolStr)>,
     pub identifiers: HashMap<TypeId, Identifier>,
     pub identifiers_by_names: HashMap<SmolStr, Identifier>,
-    pub components: HashSet<Identifier>,
     pub tags: HashSet<StrippedIdentifier>,
 }
 
@@ -167,6 +171,12 @@ impl_component! {
 }
 impl_component! {
     pub struct InstanceOf {}
+}
+impl_component! {
+    pub struct ChildOf {}
+}
+impl_component! {
+    pub struct DynamicTag {}
 }
 
 #[derive(Debug)]
@@ -197,7 +207,7 @@ impl EntityNameGetter {
     where
         F: FnOnce(&str) -> U,
     {
-        archetypes(|a| f(a.name_by_entity(self.entity).unwrap()))
+        archetypes(|a| f(a.name_by_entity(&self.entity).unwrap()))
     }
 
     pub fn set(&self, name: &str) {
@@ -222,19 +232,61 @@ pub struct ComponentGetter<T: AbstractComponent> {
     table: TableCell,
 }
 
-impl<T: AbstractComponent> ComponentGetter<T> {
-    pub fn new(entity: Identifier, component: Identifier, archetypes: &Archetypes) -> Option<Self> {
-        let record = archetypes.record(entity)?;
-        let archetype = archetypes.archetype_from_record(&record)?;
-        let table = archetype.borrow().table().clone();
+pub trait TryGetComponent<T: AbstractComponent> {
+    fn try_get<F, U>(&self, f: F) -> U
+    where
+        F: FnOnce(std::result::Result<&T, GetComponentError>) -> U;
+    fn try_get_mut<F, U>(&mut self, f: F) -> U
+    where
+        F: FnOnce(std::result::Result<&mut T, GetComponentError>) -> U;
+}
 
-        Some(Self {
+impl<T: AbstractComponent> TryGetComponent<T>
+    for std::result::Result<ComponentGetter<T>, GetComponentError>
+{
+    fn try_get<F, U>(&self, f: F) -> U
+    where
+        F: FnOnce(std::result::Result<&T, GetComponentError>) -> U,
+    {
+        match self {
+            Ok(getter) => f(Ok(getter.get_component())),
+            Err(err) => f(Err(err.clone())),
+        }
+    }
+
+    fn try_get_mut<F, U>(&mut self, f: F) -> U
+    where
+        F: FnOnce(std::result::Result<&mut T, GetComponentError>) -> U,
+    {
+        match self {
+            Ok(getter) => f(Ok(getter.get_component_mut())),
+            Err(err) => f(Err(err.clone())),
+        }
+    }
+}
+
+impl<T: AbstractComponent> ComponentGetter<T> {
+    pub fn new(
+        entity: Identifier,
+        component: Identifier,
+        archetypes: &Archetypes,
+        archetype: ArchetypeCell,
+    ) -> Self {
+        let table = archetype.borrow().table().clone();
+        Self {
             phantom_data: PhantomData,
             records: archetypes.records.clone(),
             component,
             record_index: entity.low32() as usize,
             table: table.clone().into(),
-        })
+        }
+    }
+
+    pub fn try_get<F, U>(&self, f: F) -> U
+    where
+        F: FnOnce(Option<&T>) -> U,
+    {
+        f(Some(self.get_component()))
     }
 
     pub fn get<F, U>(&self, f: F) -> U
@@ -251,11 +303,23 @@ impl<T: AbstractComponent> ComponentGetter<T> {
         f(self.get_component_mut())
     }
 
+    pub fn try_get_mut<F, U>(&mut self, f: F) -> U
+    where
+        F: FnOnce(Option<&mut T>) -> U,
+    {
+        f(Some(self.get_component_mut()))
+    }
+
     fn get_component(&self) -> &T {
         let records = self.records.borrow();
-        let record = &records[self.record_index].unwrap();
+        let record = &records[self.record_index].expect("entity should be valid");
         let table = self.table.borrow();
-        let storage = table.storage(self.component).unwrap();
+        let storage = table.storage(self.component).expect_fn(|| {
+            format!(
+                "expected storage for component {0} to exist",
+                tynm::type_name::<T>()
+            )
+        });
         let storage_mut = storage.borrow();
         let component = storage_mut.component(record.table_row);
         //ooo spooky
@@ -264,12 +328,16 @@ impl<T: AbstractComponent> ComponentGetter<T> {
 
     fn get_component_mut(&mut self) -> &mut T {
         let records = self.records.borrow();
-        let record = &records[self.record_index].unwrap();
+        let record = &records[self.record_index].expect("entity should be valid");
         let table = self.table.borrow();
-        let storage = table.storage(self.component).unwrap();
+        let storage = table.storage(self.component).expect_fn(|| {
+            format!(
+                "expected storage for component {0} to exist",
+                tynm::type_name::<T>()
+            )
+        });
         let storage_mut = storage.borrow_mut();
         let component = storage_mut.component(record.table_row);
-        //ooo spooky
         unsafe { &mut *(component.as_ptr() as *mut T) }
     }
 }
@@ -287,7 +355,6 @@ impl MyTypeRegistry {
         Self {
             type_ids_data: HashMap::new(),
             identifiers: HashMap::new(),
-            components: HashSet::new(),
             tags: HashSet::new(),
             layouts: HashMap::new(),
             functions: HashMap::new(),
@@ -321,8 +388,17 @@ pub struct QueryStorage {
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct NameRight {
-    name: SmolStr,
-    parent_id: usize,
+    pub name: SmolStr,
+    pub parent_id: usize,
+}
+
+impl NameRight {
+    pub fn global(name: SmolStr) -> Self {
+        Self {
+            name,
+            parent_id: WILDCARD.0.low32() as usize,
+        }
+    }
 }
 
 impl From<(String, Identifier)> for NameRight {
@@ -345,8 +421,8 @@ impl NameRight {
 
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct NameLeft {
-    entity_index: usize,
-    parent_index: usize,
+    pub entity_index: usize,
+    pub parent_index: usize,
 }
 
 impl From<(Identifier, Identifier)> for NameLeft {
@@ -359,6 +435,12 @@ impl From<(Identifier, Identifier)> for NameLeft {
 }
 
 impl NameLeft {
+    pub fn global(entity_id: Identifier) -> Self {
+        Self {
+            entity_index: entity_id.low32() as usize,
+            parent_index: WILDCARD.0.low32() as usize,
+        }
+    }
     pub fn from_ids(entity_id: Identifier, parent_id: Identifier) -> Self {
         Self {
             entity_index: entity_id.low32() as usize,
@@ -413,7 +495,7 @@ pub struct Archetypes {
     tables_by_hashes: HashMap<u64, TableVec>,
     names: NamesMap,
     unique_names: HashSet<UniqueName>,
-    archetypes_by_ids: HashMap<Identifier, ArchetypeSet>,
+    archetypes_by_ids: HashMap<StrippedIdentifier, ArchetypeSet>,
     unused_ids: VecDeque<Identifier>,
     entity_id: u32,
     children_pool: Rc<RefCell<Vec<(Entity, Depth)>>>,
@@ -427,6 +509,7 @@ pub struct Archetypes {
     temp_components: TempComponentsStorage,
     callbacks: Rc<RefCell<OnChangeCallbacks>>,
     state_operations: Rc<RefCell<Vec<StateOperation>>>,
+    entity_parser: EntityParser,
 }
 
 impl Archetypes {
@@ -454,6 +537,7 @@ impl Archetypes {
             temp_components: TempComponentsStorage::new(),
             callbacks: RefCell::new(OnChangeCallbacks::new()).into(),
             state_operations: RefCell::new(vec![]).into(),
+            entity_parser: EntityParser::new(),
         };
         {
             let mut registry = archetypes.type_registry.borrow_mut();
@@ -479,6 +563,7 @@ impl Archetypes {
         archetypes.register_component::<EnumTagId>();
         archetypes.register_component::<ChildOf>();
         archetypes.register_component::<Prefab>();
+        archetypes.register_component::<DynamicTag>();
         archetypes
     }
 
@@ -505,7 +590,7 @@ impl Archetypes {
     pub fn debug_print_entities(&self) {
         let records = self.records.borrow();
         for record in records.iter().flatten() {
-            let name = self.debug_id_name(record.entity).unwrap_or("Entity".into());
+            let name = self.debug_id_name(record.entity);
             println!("id: {}, name: {},", record.entity.low32(), name);
         }
     }
@@ -578,8 +663,10 @@ impl Archetypes {
         self.record_by_index(index).map(|r| r.entity)
     }
 
-    pub fn debug_id_name(&self, id: Identifier) -> Option<SmolStr> {
-        let record = self.record(id)?;
+    pub fn debug_id_name(&self, id: Identifier) -> SmolStr {
+        let Some(record) = self.record(id) else {
+            return format!("Invalid entity {0:?}", id).into();
+        };
         let parent = {
             let child_of_rel = self.find_rels::<ChildOf, Wildcard>(&record).unwrap().next();
             if let Some(child_of_rel) = child_of_rel {
@@ -588,43 +675,53 @@ impl Archetypes {
                 WILDCARD.0
             }
         };
-        if let Some(name) = self.name_by_entity(NameLeft {
+        if let Some(name) = self.name_by_entity(&NameLeft {
             entity_index: id.low32() as _,
             parent_index: parent.low32() as _,
         }) {
-            return Some(name.clone());
+            return name.clone();
         }
         if self.is_id_component(id) {
-            Some(self.debug_component_name(id)?)
+            self.debug_component_name(id)
         } else {
-            Some(u64::from(id).to_smolstr())
+            u64::from(id).to_smolstr()
         }
     }
 
-    pub fn debug_component_name(&self, id: Identifier) -> Option<SmolStr> {
+    pub fn debug_component_name(&self, id: Identifier) -> SmolStr {
         use ComponentType as CT;
-        match self.component_type(id).ok()? {
-            CT::RegularComponent | ComponentType::ComponentTag => {
-                Some(self.type_registry().type_ids_data[&id.stripped()].1.clone())
-            }
-            CT::EntityTag => Some(u64::from(id).to_smolstr()),
-            CT::EnumTag => Some("TODO".to_smolstr()),
+        let comp_type = match self.component_type(id) {
+            Ok(t) => t,
+            Err(err) => return format!("Invalid entity {0:?} - {1}", id, err).into(),
+        };
+        match comp_type {
+            CT::RegularComponent | ComponentType::ComponentTag => self
+                .type_registry()
+                .type_ids_data
+                .get(&id.stripped())
+                .expect_fn(|| format!("Invalid entity {0:?} - type id data not found", id))
+                .1
+                .clone(),
+            CT::EntityTag => u64::from(id).to_smolstr(),
+            CT::EnumTag => "TODO".to_smolstr(),
             CT::RelationshipComponentTag | CT::MixedRelationshipTag | CT::DataRelationship(_) => {
                 self.relationship_component_name(id)
             }
         }
     }
 
-    pub fn relationship_component_name(&self, id: Identifier) -> Option<SmolStr> {
-        let (Some(relation), Some(target)) = (self.relation_entity(id), self.target_entity(id))
-        else {
-            return None;
+    pub fn relationship_component_name(&self, id: Identifier) -> SmolStr {
+        let Some(relation) = self.relation_entity(id) else {
+            return format!("Invalid entity {0:?} - no relation entity", id).into();
         };
-        Some(format_smolstr!(
+        let Some(target) = self.target_entity(id) else {
+            return format!("Invalid entity {0:?} - no target entity", id).into();
+        };
+        format_smolstr!(
             "({0}, {1})",
-            self.debug_id_name(relation)?,
-            self.debug_id_name(target)?
-        ))
+            self.debug_id_name(relation),
+            self.debug_id_name(target)
+        )
     }
 
     pub fn is_id_component(&self, id: Identifier) -> bool {
@@ -660,7 +757,7 @@ impl Archetypes {
                 };
                 if self
                     .get_component::<Component>(COMPONENT_ID, target)
-                    .is_some()
+                    .is_ok()
                 {
                     return Ok(ComponentType::RelationshipComponentTag);
                 }
@@ -713,8 +810,7 @@ impl Archetypes {
     //4) Non-data relations
     //5) Data relations (2 variants)
     //6) Enum tags
-    //TODO: add enum tags support, and maaybe introduce named entities which are always present, e.g.
-    //#MainCamera
+    //TODO: add enum tags support, add full #'entity_name' support, clean code
     pub fn serialize_entity(&self, entity: Identifier) -> Option<String> {
         let registry = self.type_registry.clone();
         let registry_ref = registry.borrow();
@@ -728,10 +824,15 @@ impl Archetypes {
 
         for component in components.iter().copied() {
             use ComponentType as CT;
-            let debug_name = self.debug_id_name(component).unwrap().to_string();
+            let debug_name_smol = self.debug_id_name(component);
+            let debug_name = debug_name_smol.to_string();
             match self.component_type(component).unwrap() {
                 CT::DataRelationship(data_pos) => {
-                    let serialize = registry_ref.functions.get(&component).unwrap().serialize;
+                    let serialize = registry_ref
+                        .functions
+                        .get(&component.stripped())
+                        .unwrap()
+                        .serialize;
                     let storage = archetype_ref
                         .table()
                         .borrow()
@@ -760,7 +861,11 @@ impl Archetypes {
                         .insert(debug_name, component_value);
                 }
                 CT::RegularComponent => {
-                    let serialize = registry_ref.functions.get(&component).unwrap().serialize;
+                    let serialize = registry_ref
+                        .functions
+                        .get(&component.stripped())
+                        .unwrap()
+                        .serialize;
                     let storage = archetype_ref
                         .table()
                         .borrow()
@@ -781,12 +886,13 @@ impl Archetypes {
                 }
                 CT::ComponentTag => tags.as_array_mut().unwrap().push(debug_name.into()),
                 CT::EntityTag => {
-                    //Do nothing, as entity tags are not garanteed to be persent over multiple
-                    //sessions
+                    if self.entity_by_global_name(debug_name_smol).is_some() {
+                        tags.as_array_mut()
+                            .unwrap()
+                            .push(format!("#{}", &debug_name).into());
+                    }
                 }
-                CT::MixedRelationshipTag => {
-                    //Do nothing for the same reason as above
-                }
+                CT::MixedRelationshipTag => {}
                 CT::EnumTag => tags.as_array_mut().unwrap().push("TODO".into()),
                 CT::RelationshipComponentTag => {
                     tags.as_array_mut().unwrap().push(debug_name.into())
@@ -799,55 +905,82 @@ impl Archetypes {
                 .unwrap()
                 .insert("Tags".into(), tags);
         }
+        let name_left = NameLeft::from_ids(entity, WILDCARD.0);
+        if self.entity_has_name(&name_left) {
+            let name = self.name_by_entity(&name_left).unwrap();
+            json_value
+                .as_object_mut()
+                .unwrap()
+                .insert("Name".into(), name.to_string().into());
+        }
+
         Some(serde_json::to_string_pretty(&json_value).unwrap())
     }
 
-    pub fn deserialize_entity(&mut self, json: &str) -> Entity {
-        let entity = self.add_entity(EntityKind::Regular);
-        let registry = self.type_registry.clone();
-        let registry_ref = registry.borrow();
-        let record = self.record(entity).unwrap();
-        let archetype = self.archetype_by_id(record.arhetype_id).clone();
-        let archetype_ref = archetype.borrow();
-        let mut json_value = serde_json::from_str::<serde_json::Value>(json).unwrap();
-        let json_object = json_value.as_object_mut().unwrap();
-        for (name, value) in json_object {
-            if name == "Tags" {
-                let tags = value.as_array().unwrap();
-                for tag in tags.iter() {
-                    if let Some(tag) = registry_ref
-                        .identifiers_by_names
-                        .get(&tag.as_str().unwrap().to_smolstr())
-                    {
-                        self.add_entity_tag(entity, *tag).unwrap();
-                    }
+    fn tag_by_id_or_name(&mut self, id_or_name: IdOrName) -> (Identifier, TagType) {
+        use crate::either::Either;
+        match id_or_name {
+            Either::First((id, tag_type)) => (id, tag_type),
+            Either::Second(name) => {
+                if let Some(entity) = self.entity_by_global_name(name.clone()) {
+                    return (entity, TagType::Entity);
+                }
+                let tag = self.add_entity(EntityKind::Regular);
+                self.set_entity_name(NameLeft::global(tag), name);
+                self.add_component_tag(self.component_id::<DynamicTag>(), tag)
+                    .unwrap();
+                (tag, TagType::Entity)
+            }
+        }
+    }
 
+    pub fn deserialize_entity(&mut self, json: &str) -> Result<Entity, ParseError> {
+        let entity = self.add_entity(EntityKind::Regular);
+        for parsed_component in self.entity_parser.parse(json, self)? {
+            match parsed_component {
+                ParsedEntityItem::Tag(id_or_name) => {
+                    let name = id_or_name.clone();
+                    let (tag, tag_type) = self.tag_by_id_or_name(id_or_name);
+                    self.add_entity_tag_inner(entity, tag, tag_type.is_type())
+                        .unwrap();
+                }
+                ParsedEntityItem::RelationshipTag(relation, target) => {
+                    let (relation, _) = self.tag_by_id_or_name(relation);
+                    let (target, _) = self.tag_by_id_or_name(target);
+                    self.add_relationship(entity, relation, target, TableReusage::New)
+                        .unwrap();
+                }
+                ParsedEntityItem::Component(id, deserialize_fn, value, comp_type) => {
+                    let (archetype, _) = match comp_type {
+                        entity_parser::ComponentType::Regular => {
+                            self.add_component(id, entity, TableReusage::New).unwrap()
+                        }
+                        entity_parser::ComponentType::DataRelationship(data_pos) => self
+                            .add_data_relationship(
+                                entity,
+                                self.relation_entity(id).unwrap(),
+                                self.target_entity(id).unwrap(),
+                                data_pos,
+                            )
+                            .unwrap(),
+                    };
+                    let storage = archetype
+                        .borrow()
+                        .table()
+                        .borrow()
+                        .storage(id)
+                        .unwrap()
+                        .clone();
+                    let storage = storage.borrow_mut();
+                    deserialize_fn(value, storage).unwrap();
+                }
+                ParsedEntityItem::Name(name) => {
+                    self.set_entity_name(NameLeft::global(entity), name);
                 }
             }
         }
-        todo!();
-        // for component in components.iter().copied() {
-        //     let deserialize = registry_ref.functions.get(&component).unwrap().deserialize;
-        //     let (new_archetype, _) = self
-        //         .add_component(component, entity, table_reusage)
-        //         .ok()?;
-        //     let storage = archetype_ref
-        //         .table()
-        //         .borrow()
-        //         .storage(component)
-        //         .unwrap()
-        //         .clone();
-        //     let old_storage_mut = storage.borrow_mut();
-        //     let component_ptr: *mut u8 =
-        //         unsafe { old_storage_mut.0.get_checked(record.table_row.0).as_ptr() };
-        //
-        //     let component_value =
-        //         serialize(unsafe { Ptr::new(NonNull::new(component_ptr).unwrap()) }).unwrap();
-        //     let _ = json_value.as_object_mut().unwrap().insert(
-        //         registry_ref.type_names[&component.low32()].clone(),
-        //         component_value,
-        //     );
-        // }
+
+        Ok(entity.into())
     }
 
     pub fn clone_entity(&mut self, entity: Identifier) -> Option<Identifier> {
@@ -876,7 +1009,11 @@ impl Archetypes {
 
             let old_archetype_ref = old_archetype.borrow();
             let cloned_archetype_ref = cloned_archetype.borrow();
-            let clone_into = registry_ref.functions.get(&component).unwrap().clone;
+            let clone_into = registry_ref
+                .functions
+                .get(&component.stripped())
+                .unwrap()
+                .clone;
             let old_storage = old_archetype_ref
                 .table()
                 .borrow()
@@ -971,7 +1108,7 @@ impl Archetypes {
             self.unique_names.remove(&old_unique_name);
             self.unique_names.insert(new_unique_name);
         }
-        if self.name_by_entity(left).is_some() {
+        if self.name_by_entity(&left).is_some() {
             let (_, old_right) = self.names.remove_by_left(&left).unwrap();
             let entity = NameLeft::new(left.entity_index, parent.low32() as usize);
             self.names
@@ -979,18 +1116,27 @@ impl Archetypes {
         }
     }
 
-    pub fn entity_has_name(&self, entity: NameLeft) -> bool {
-        self.names.contains_left(&entity)
+    pub fn entity_has_name(&self, entity: &NameLeft) -> bool {
+        self.names.contains_left(entity)
     }
 
-    pub fn name_by_entity(&self, entity: NameLeft) -> Option<&SmolStr> {
-        self.names.get_by_left(&entity).map(|n| &n.name)
+    pub fn name_by_entity(&self, entity: &NameLeft) -> Option<&SmolStr> {
+        self.names.get_by_left(entity).map(|n| &n.name)
     }
 
-    pub fn entity_by_name(&self, name: &str, parent: Identifier) -> Option<NameLeft> {
+    pub fn entity_by_name(&self, name: &NameRight) -> Option<Identifier> {
         self.names
-            .get_by_right(&NameRight::new(name.to_smolstr(), parent.low32() as usize))
+            .get_by_right(name)
             .cloned()
+            .and_then(|n| self.record_by_index(n.entity_index).map(|r| r.entity))
+    }
+
+    pub fn entity_by_global_name(&self, name: SmolStr) -> Option<Identifier> {
+        let name = NameRight::global(name);
+        self.names
+            .get_by_right(&name)
+            .cloned()
+            .and_then(|n| self.record_by_index(n.entity_index).map(|r| r.entity))
     }
 
     pub fn is_component_empty(&self, component: Identifier) -> bool {
@@ -1002,6 +1148,10 @@ impl Archetypes {
 
     pub fn type_registry(&self) -> Ref<MyTypeRegistry> {
         self.type_registry.borrow()
+    }
+
+    pub fn type_registry_rc(&self) -> Rc<RefCell<MyTypeRegistry>> {
+        self.type_registry.clone()
     }
 
     pub fn record_by_index(&self, index: usize) -> Ref<Option<EntityRecord>> {
@@ -1068,7 +1218,7 @@ impl Archetypes {
         }
     }
 
-    pub fn relationship_name(&self, relationship: Identifier) -> Option<String> {
+    pub fn relationship_name(&self, _relationship: Identifier) -> Option<String> {
         todo!()
         // let relation = self.relation_entity(relationship)?;
         // let target = self.target_entity(relationship)?;
@@ -1096,12 +1246,6 @@ impl Archetypes {
         let id_unpacked = entity.unpack();
         if id_unpacked.high32.is_relationship {
             return true;
-            // let (Some(relation), Some(target)) =
-            //     (self.relation_entity(entity), self.target_entity(entity))
-            // else {
-            //     return false;
-            // };
-            // return self.is_entity_alive(relation) && self.is_entity_alive(target);
         }
         let Some(record) = self.record(entity) else {
             return false;
@@ -1113,7 +1257,34 @@ impl Archetypes {
         &self.archetypes[id.0]
     }
 
-    pub fn add_data_relationship<T: AbstractComponent>(
+    pub fn add_data_relationship(
+        &mut self,
+        entity: Identifier,
+        relation: Identifier,
+        target: Identifier,
+        rel_data_pos: RelDataPosition,
+    ) -> Result<(ArchetypeCell, ComponentAddState)> {
+        let relationship = Archetypes::relationship_id(relation, target);
+        {
+            let mut type_registry = self.type_registry.borrow_mut();
+            let data_part = match rel_data_pos {
+                RelDataPosition::First => relation,
+                RelDataPosition::Second => target,
+            };
+            let functions = type_registry.functions.get(&data_part.stripped()).expect("expected {0} to have component functions registered. Either this part of the rel is not a component, or your forgot to register this type").clone();
+            let layout = *type_registry.layouts.get(&data_part.stripped()).unwrap();
+            type_registry
+                .functions
+                .insert(relationship.stripped(), functions);
+            type_registry
+                .layouts
+                .insert(relationship.stripped(), layout);
+        }
+
+        self.add_relationship(entity, relation, target, TableReusage::New)
+    }
+
+    pub fn add_data_relationship_typed<T: AbstractComponent>(
         &mut self,
         entity: Identifier,
         relation: Identifier,
@@ -1121,33 +1292,11 @@ impl Archetypes {
         value: T,
     ) -> Result<()> {
         assert!(std::mem::size_of::<T>() > 0);
-        let mut relation_record = match self.record(relation) {
-            Some(r) => r,
-            None => bail!("expected valid relation record"),
-        };
-        let mut target_record = match self.record(target) {
-            Some(r) => r,
-            None => bail!("expected valid target record"),
-        };
-        let mut entity_record = match self.record(entity) {
-            Some(r) => r,
-            None => bail!("expected valid entity record"),
-        };
-
-        relation_record.entity.set_is_relation(true);
-        target_record.entity.set_is_target(true);
-        //TODO: consider removing this flag altogether
-        entity_record.entity.set_has_relationships(true);
-
-        *self.record_mut(entity) = Some(entity_record);
-        *self.record_mut(relation) = Some(relation_record);
-        *self.record_mut(target) = Some(target_record);
-
         let relationship = Archetypes::relationship_id(relation, target);
         {
             let mut type_registry = self.type_registry.borrow_mut();
             type_registry.functions.insert(
-                relationship,
+                relationship.stripped(),
                 Functions {
                     clone: T::clone_into,
                     serialize: T::serialize,
@@ -1173,7 +1322,8 @@ impl Archetypes {
             return Ok(());
         }
 
-        let (archetype, add_state) = self.add_component(relationship, entity, TableReusage::New)?;
+        let (archetype, add_state) =
+            self.add_relationship(entity, relation, target, TableReusage::New)?;
         let mut archetype = archetype.borrow_mut();
         match add_state {
             ComponentAddState::New => {
@@ -1182,7 +1332,13 @@ impl Archetypes {
             ComponentAddState::AlreadyExisted => {
                 let table_mut = archetype.table().borrow_mut();
                 let mut storage = table_mut.storage(relationship).unwrap().borrow_mut();
-                storage.replace_unchecked(entity_record.table_row.0, value);
+                storage.replace_unchecked(
+                    self.record(entity)
+                        .expect("entity must be valid")
+                        .table_row
+                        .0,
+                    value,
+                );
             }
         }
         Ok(())
@@ -1266,7 +1422,7 @@ impl Archetypes {
             return false;
         };
 
-        let Some(archetypes) = self.archetypes_by_ids.get(&component) else {
+        let Some(archetypes) = self.archetypes_by_ids.get(&component.stripped()) else {
             return false;
         };
         //TODO: only works if archetypes don't ever get replaced/removed
@@ -1445,7 +1601,7 @@ impl Archetypes {
                 .layouts
                 .insert(id.stripped(), Layout::new::<T>());
             type_registry.functions.insert(
-                id,
+                id.stripped(),
                 Functions {
                     clone: T::clone_into,
                     serialize: T::serialize,
@@ -1465,7 +1621,8 @@ impl Archetypes {
         entity: Identifier,
         relation: Identifier,
         target: Identifier,
-    ) -> Result<()> {
+        table_reusage: TableReusage,
+    ) -> Result<(ArchetypeCell, ComponentAddState)> {
         let mut relation_record = match self.record(relation) {
             Some(r) => r,
             None => bail!("expected valid relation record"),
@@ -1489,13 +1646,14 @@ impl Archetypes {
         *self.record_mut(target) = Some(target_record);
 
         let relationship = Archetypes::relationship_id(relation, target);
-        self.type_registry
-            .borrow_mut()
-            .tags
-            .insert(relationship.into());
+        if matches!(table_reusage, TableReusage::Reuse) {
+            self.type_registry
+                .borrow_mut()
+                .tags
+                .insert(relationship.into());
+        }
 
-        self.add_component(relationship, entity, TableReusage::Reuse)?;
-        Ok(())
+        self.add_component(relationship, entity, table_reusage)
     }
 
     pub fn add_component_tag(&mut self, entity: Identifier, tag: Identifier) -> Result<()> {
@@ -1520,12 +1678,8 @@ impl Archetypes {
         }
         let has_component_component = {
             let mut type_registry = self.type_registry.borrow_mut();
-            let contains_tag = type_registry.components.contains(&tag);
-            if !contains_tag {
-                type_registry.components.insert(tag);
-                type_registry.tags.insert(tag.into());
-            }
-            contains_tag
+            type_registry.tags.insert(tag.into());
+            self.has_component(COMPONENT_ID, tag)
         };
         if !has_component_component {
             self.add_component_typed::<Component>(
@@ -1577,17 +1731,39 @@ impl Archetypes {
         &self,
         component: Identifier,
         entity: Identifier,
-    ) -> Option<ComponentGetter<T>> {
-        if !self.has_component(component, entity) {
-            return None;
+    ) -> Result<ComponentGetter<T>, GetComponentError> {
+        if !self.is_entity_alive(entity) {
+            return Err(GetComponentError::EntityNotAlive(
+                self.debug_id_name(entity),
+            ));
         }
-        ComponentGetter::new(entity, component, self)
+        if !self.has_component(component, entity) {
+            return Err(GetComponentError::NoComponent(
+                self.debug_id_name(entity),
+                self.debug_id_name(component),
+            ));
+        };
+        let record = self
+            .record(entity)
+            .expect_fn(|| format!("expected entity {0:?} to have a valid record", entity));
+        let archetype = self.archetype_from_record(&record).expect_fn(|| {
+            format!(
+                "expected record of entity {0:?} to point to a valid archetype",
+                self.debug_id_name(entity)
+            )
+        });
+        Ok(ComponentGetter::new(
+            entity,
+            component,
+            self,
+            archetype.clone(),
+        ))
     }
 
     pub fn add_enum_tag<T: EnumTag>(&mut self, entity: Identifier, value: T) -> Result<()> {
         let enum_type_id = self.component_id::<T>();
         let enum_tag_id = self.component_id::<EnumTagId>();
-        self.add_data_relationship::<EnumTagId>(
+        self.add_data_relationship_typed::<EnumTagId>(
             entity,
             enum_type_id,
             enum_tag_id,
@@ -1601,7 +1777,8 @@ impl Archetypes {
         let enum_type_id = self.component_id::<T>();
         let relationship = Archetypes::relationship_id(enum_type_id, enum_tag_id);
         let enum_id = self
-            .get_component::<EnumTagId>(relationship, entity)?
+            .get_component::<EnumTagId>(relationship, entity)
+            .ok()?
             .get(|c| *c);
         T::from_id(enum_id.0)
     }
@@ -1618,7 +1795,7 @@ impl Archetypes {
         let enum_tag_id = self.component_id::<EnumTagId>();
         let enum_type_id = self.component_id::<T>();
         let relationship = Archetypes::relationship_id(enum_type_id, enum_tag_id);
-        let Some(enum_id) = self
+        let Ok(enum_id) = self
             .get_component::<EnumTagId>(relationship, entity)
             .map(|c| c.get(|c| *c))
         else {
@@ -1650,11 +1827,9 @@ impl Archetypes {
         let mut archetype = archetype.borrow_mut();
         match add_state {
             ComponentAddState::New => {
-                // dbg!("new");
                 archetype.push_component::<T>(component, value);
             }
             ComponentAddState::AlreadyExisted => {
-                // dbg!("existed");
                 let table_mut = archetype.table().borrow_mut();
                 let mut storage = table_mut.storage(component).unwrap().borrow_mut();
                 storage.replace_unchecked(self.record(entity).unwrap().table_row.0, value);
@@ -1985,11 +2160,11 @@ impl Archetypes {
     }
 
     pub fn archetypes_with_id(&mut self, id: Identifier) -> &mut ArchetypeSet {
-        self.archetypes_by_ids.entry(id).or_default()
+        self.archetypes_by_ids.entry(id.stripped()).or_default()
     }
 
     pub fn get_archetypes_with_id(&self, id: Identifier) -> Option<&ArchetypeSet> {
-        self.archetypes_by_ids.get(&id)
+        self.archetypes_by_ids.get(&id.stripped())
     }
 
     pub fn add_table_by_hash(&mut self, table: TableCell, hash: u64) {
@@ -2028,5 +2203,25 @@ impl Archetypes {
 impl Default for Archetypes {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stripped() {
+        let id = Identifier(u64::to_le_bytes(u64::MAX));
+        let stripped = id.stripped().0.unpack();
+        assert_eq!(stripped.low32, u32::MAX);
+        assert_eq!(stripped.high32.second.to_le(), u32::MAX >> 7);
+        assert!(!stripped.high32.is_watched);
+        assert!(!stripped.high32.is_target);
+        assert!(!stripped.high32.is_relation);
+        assert!(!stripped.high32.is_target_exclusive);
+        assert!(!stripped.high32.is_relation_exclusive);
+        assert!(!stripped.high32.is_active);
+        assert!(stripped.high32.is_relationship);
     }
 }

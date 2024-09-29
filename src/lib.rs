@@ -1,4 +1,7 @@
 pub mod query_structs;
+pub mod expect_fn;
+pub mod either;
+pub mod entity_parser;
 pub mod plugins;
 pub mod on_change_callbacks;
 #[macro_use]

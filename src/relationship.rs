@@ -3,7 +3,7 @@ use std::{collections::BTreeSet, rc::Rc};
 use crate::{
     archetype::ArchetypeRow,
     archetypes::{Archetypes, WILDCARD_32, WILDCARD_RELATIONSHIP},
-    components::component::{AbstractComponent, ChildOf},
+    components::component::AbstractComponent,
     entity::Entity,
     identifier::Identifier,
     world::{archetypes, archetypes_mut},

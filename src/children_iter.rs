@@ -1,7 +1,9 @@
 use std::{cell::RefCell, rc::Rc};
 
 use crate::{
-    archetypes::Archetypes, components::component::ChildOf, entity::Entity, identifier::Identifier,
+    archetypes::{Archetypes, ChildOf},
+    entity::Entity,
+    identifier::Identifier,
     world::archetypes,
 };
 

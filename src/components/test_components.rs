@@ -1,12 +1,11 @@
-use bevy_reflect::Reflect;
-impl_component! {
-    #[derive(Copy, Debug, Default)]
-    pub struct Position {
-        #[serde(default)]
-        pub x: i32,
-        #[serde(default)]
-        pub y: i32,
-    }
+use macro_rules_attribute::apply;
+#[apply(impl_component!)]
+#[derive(Copy, Debug, Default)]
+pub struct Position {
+    #[serde(default)]
+    pub x: i32,
+    #[serde(default)]
+    pub y: i32,
 }
 
 impl Position {
@@ -14,12 +13,11 @@ impl Position {
         Self { x, y }
     }
 }
-impl_component! {
-    #[derive(Copy, Debug, Default)]
-    pub struct Velocity {
-        pub x: i32,
-        pub y: i32,
-    }
+#[apply(impl_component!)]
+#[derive(Copy, Debug, Default)]
+pub struct Velocity {
+    pub x: i32,
+    pub y: i32,
 }
 
 impl Velocity {
@@ -28,31 +26,23 @@ impl Velocity {
     }
 }
 
-impl_component! {
-    pub struct Name {
-        pub value: String,
-    }
+#[apply(impl_component!)]
+pub struct Name {
+    pub value: String,
 }
-impl_component! {
-    pub struct Owes {
-        pub amount: i32,
-    }
+#[apply(impl_component!)]
+pub struct Owes {
+    pub amount: i32,
 }
-impl_component! {
-    pub struct IsCool {}
-}
-impl_component! {
-    pub struct Likes {}
-}
-impl_component! {
-    pub struct Begin {}
-}
-impl_component! {
-    pub struct End {}
-}
-impl_component! {
-    pub struct Apples {}
-}
-impl_component! {
-    pub struct Oranges {}
-}
+#[apply(impl_component!)]
+pub struct IsCool {}
+#[apply(impl_component!)]
+pub struct Likes {}
+#[apply(impl_component!)]
+pub struct Begin {}
+#[apply(impl_component!)]
+pub struct End {}
+#[apply(impl_component!)]
+pub struct Apples {}
+#[apply(impl_component!)]
+pub struct Oranges {}

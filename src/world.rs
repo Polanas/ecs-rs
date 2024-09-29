@@ -1,9 +1,12 @@
 use std::{any::TypeId, cell::RefCell, rc::Rc};
 
+use smol_str::{SmolStr, ToSmolStr};
+
 use crate::{
     archetypes::{Archetypes, EntityKind, Prefab, StateOperation, ENTITY_ID},
     components::{component::AbstractComponent, register::RegisterComponentQuery},
     entity::Entity,
+    entity_parser::ParseError,
     events::{self, CurrentSystemTypeId, Event, EventReader, Events},
     on_change_callbacks::{OnAddCallback, OnRemoveCallback},
     plugins::Plugins,
@@ -12,6 +15,7 @@ use crate::{
     systems::{AbstractSystemsWithStateData, StateGetter, SystemStage, SystemState, Systems},
 };
 
+#[derive(Default)]
 pub struct World {
     currently_running_systems: bool,
 }
@@ -47,11 +51,6 @@ thread_local! {
 }
 
 impl World {
-    pub(crate) fn default() -> World {
-        Self {
-            currently_running_systems: false,
-        }
-    }
     #[allow(clippy::new_without_default)]
     pub fn new() -> Self {
         ARCHETYPES.with(|a| {
@@ -62,11 +61,15 @@ impl World {
         }
     }
 
+    pub fn entity_by_global_name(&self, name: &str) -> Option<Entity> {
+        archetypes_mut(|a| a.entity_by_global_name(name.to_smolstr())).map(|id| id.into())
+    }
+
     pub fn register_components<T: RegisterComponentQuery>(&self) {
         T::register();
     }
 
-    pub fn deserialize_entity(&self, json: &str) -> Entity {
+    pub fn deserialize_entity(&self, json: &str) -> Result<Entity, ParseError> {
         archetypes_mut(|a| a.deserialize_entity(json))
     }
 

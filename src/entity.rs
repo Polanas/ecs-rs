@@ -4,15 +4,17 @@ use smol_str::SmolStr;
 
 use crate::{
     archetypes::{
-        self, Archetypes, ComponentGetter, EntityNameGetter, EntityRecord, InstanceOf, NameLeft,
-        TableReusage, Wildcard, WILDCARD_RELATIONSHIP,
+        self, Archetypes, ChildOf, ComponentGetter, EntityNameGetter, EntityRecord,
+        GetComponentError, InstanceOf, NameLeft, TableReusage, TryGetComponent, Wildcard,
+        WILDCARD_RELATIONSHIP,
     },
     children_iter::ChildrenRecursiveIter,
     components::{
-        component::{AbstractComponent, ChildOf, EnumTag},
+        component::{AbstractComponent, EnumTag},
         component_bundle::ComponentBundle,
         component_query::ComponentQuery,
     },
+    expect_fn::ExpectFnResult,
     identifier::Identifier,
     query::{Query, QueryState},
     relationship::{FindRelationshipsIter, Relationship, RelationshipsIter},
@@ -85,7 +87,7 @@ impl Entity {
     }
 
     pub fn debug_name(&self) -> SmolStr {
-        archetypes(|archetypes| archetypes.debug_id_name(self.0).unwrap())
+        archetypes(|archetypes| archetypes.debug_id_name(self.0))
     }
 
     pub fn name_parent(&self) -> Entity {
@@ -101,7 +103,7 @@ impl Entity {
     }
     pub fn has_name(&self) -> bool {
         let parent = self.name_parent();
-        archetypes(|archetypes| archetypes.entity_has_name(NameLeft::from_ids(self.0, parent.0)))
+        archetypes(|archetypes| archetypes.entity_has_name(&NameLeft::from_ids(self.0, parent.0)))
     }
     pub fn remove_name(&self) -> Self {
         let parent = self.name_parent();
@@ -169,9 +171,9 @@ impl Entity {
         let old_entity_and_parent = NameLeft::from_ids(self.into(), name_parent.into());
         self.add_mixed_tag_rel::<ChildOf>(parent);
         archetypes_mut(|archetypes| {
-            if archetypes.name_by_entity(old_entity_and_parent).is_some() {
+            if archetypes.name_by_entity(&old_entity_and_parent).is_some() {
                 let name = archetypes
-                    .name_by_entity(old_entity_and_parent)
+                    .name_by_entity(&old_entity_and_parent)
                     .unwrap()
                     .to_owned();
                 let entity_and_parent = NameLeft::from_ids(self.into(), parent.into());
@@ -193,9 +195,9 @@ impl Entity {
         let old_entity_and_parent = NameLeft::from_ids(self.into(), parent.into());
         self.remove_mixed_rel::<ChildOf>(parent);
         archetypes_mut(|archetypes| {
-            if archetypes.name_by_entity(old_entity_and_parent).is_some() {
+            if archetypes.name_by_entity(&old_entity_and_parent).is_some() {
                 let name = archetypes
-                    .name_by_entity(old_entity_and_parent)
+                    .name_by_entity(&old_entity_and_parent)
                     .unwrap()
                     .to_owned();
                 let entity_and_parent = NameLeft::from_ids(self.into(), WILDCARD.into());
@@ -237,12 +239,25 @@ impl Entity {
     pub fn get_or_add_comp<T: AbstractComponent>(
         &self,
         init: impl FnOnce() -> T,
-    ) -> ComponentGetter<T> {
+        get: impl FnOnce(&T),
+    ) {
         assert!(std::mem::size_of::<T>() > 0);
         if !self.has_comp::<T>() {
             self.add_comp(init());
         }
-        self.get_comp::<T>()
+        self.comp::<T>(get);
+    }
+
+    pub fn get_or_add_comp_mut<T: AbstractComponent>(
+        &self,
+        init: impl FnOnce() -> T,
+        get: impl FnOnce(&mut T),
+    ) {
+        assert!(std::mem::size_of::<T>() > 0);
+        if !self.has_comp::<T>() {
+            self.add_comp(init());
+        }
+        self.comp_mut::<T>(get);
     }
 
     pub fn remove_comp<T: ComponentBundle>(&self) -> Entity {
@@ -305,7 +320,7 @@ impl Entity {
             let relation_id = archetypes.component_id::<R>();
             let target_id = archetypes.component_id::<T>();
             archetypes
-                .add_data_relationship(self.0, relation_id, target_id, value)
+                .add_data_relationship_typed(self.0, relation_id, target_id, value)
                 .unwrap();
         });
 
@@ -340,7 +355,7 @@ impl Entity {
                 let relation_id = archetypes.component_id::<R>();
                 let target_id = archetypes.component_id::<T>();
                 archetypes
-                    .add_data_relationship(self.0, relation_id, target_id, value)
+                    .add_data_relationship_typed(self.0, relation_id, target_id, value)
                     .unwrap();
             });
         }
@@ -381,7 +396,7 @@ impl Entity {
             archetypes_mut(|archetypes| {
                 let relation_id = archetypes.component_id::<R>();
                 archetypes
-                    .add_data_relationship(self.0, relation_id, target.0, value)
+                    .add_data_relationship_typed(self.0, relation_id, target.0, value)
                     .unwrap();
             });
         }
@@ -394,7 +409,7 @@ impl Entity {
             archetypes_mut(|archetypes| {
                 let relation_id = archetypes.component_id::<R>();
                 archetypes
-                    .add_relationship(self.0, relation_id, target.0)
+                    .add_relationship(self.0, relation_id, target.0, TableReusage::Reuse)
                     .unwrap();
             });
         }
@@ -483,7 +498,7 @@ impl Entity {
     pub fn add_ent_rel(&self, relation: Entity, target: Entity) -> Self {
         archetypes_mut(|archetypes| {
             archetypes
-                .add_relationship(self.0, relation.0, target.0)
+                .add_relationship(self.0, relation.0, target.0, TableReusage::Reuse)
                 .unwrap();
         });
         *self
@@ -496,7 +511,7 @@ impl Entity {
             let relation_id = archetypes.component_id::<R>();
             let target_id = archetypes.component_id::<T>();
             archetypes
-                .add_relationship(self.0, relation_id, target_id)
+                .add_relationship(self.0, relation_id, target_id, TableReusage::Reuse)
                 .unwrap();
         });
         *self
@@ -532,32 +547,48 @@ impl Entity {
         archetypes_mut(|archetypes| archetypes.has_component(tag.0, self.0))
     }
 
-    pub fn get_comp<T: AbstractComponent>(&self) -> ComponentGetter<T> {
+    pub fn get_comp<T: AbstractComponent>(
+        &self,
+        f: impl FnOnce(Result<&T, GetComponentError>),
+    ) -> Entity {
         assert!(std::mem::size_of::<T>() > 0);
         archetypes_mut(|archetypes| {
             let id = archetypes.component_id::<T>();
-            archetypes.get_component(id, self.0).unwrap_or_else(|| {
-                panic!(
-                    "expected entity to have component {0}",
-                    tynm::type_name::<T>()
-                )
-            })
+            archetypes.get_component(id, self.0).try_get(f)
+        });
+        *self
+    }
+
+    pub fn get_comp_ret<T: AbstractComponent, U>(
+        &self,
+        f: impl FnOnce(Result<&T, GetComponentError>) -> U,
+    ) -> U {
+        assert!(std::mem::size_of::<T>() > 0);
+        archetypes_mut(|archetypes| {
+            let id = archetypes.component_id::<T>();
+            archetypes.get_component(id, self.0).try_get(f)
         })
     }
 
-    pub fn comp<T: AbstractComponent>(&self, f: impl FnOnce(&T)) -> Entity {
+    pub fn get_comp_mut_ret<T: AbstractComponent, U>(
+        &self,
+        f: impl FnOnce(Result<&mut T, GetComponentError>) -> U,
+    ) -> U {
         assert!(std::mem::size_of::<T>() > 0);
         archetypes_mut(|archetypes| {
             let id = archetypes.component_id::<T>();
-            archetypes
-                .get_component(id, self.0)
-                .unwrap_or_else(|| {
-                    panic!(
-                        "expected entity to have component {0}",
-                        tynm::type_name::<T>()
-                    )
-                })
-                .get(f);
+            archetypes.get_component(id, self.0).try_get_mut(f)
+        })
+    }
+
+    pub fn get_comp_mut<T: AbstractComponent>(
+        &self,
+        f: impl FnOnce(Result<&mut T, GetComponentError>),
+    ) -> Entity {
+        assert!(std::mem::size_of::<T>() > 0);
+        archetypes_mut(|archetypes| {
+            let id = archetypes.component_id::<T>();
+            archetypes.get_component(id, self.0).try_get_mut(f)
         });
         *self
     }
@@ -568,7 +599,7 @@ impl Entity {
             let id = archetypes.component_id::<T>();
             archetypes
                 .get_component(id, self.0)
-                .unwrap_or_else(|| {
+                .expect_fn(|_| {
                     panic!(
                         "expected entity to have component {0}",
                         tynm::type_name::<T>()
@@ -579,6 +610,50 @@ impl Entity {
         *self
     }
 
+    pub fn comp<T: AbstractComponent>(&self, f: impl FnOnce(&T)) -> Entity {
+        assert!(std::mem::size_of::<T>() > 0);
+        archetypes_mut(|archetypes| {
+            let id = archetypes.component_id::<T>();
+            archetypes
+                .get_component(id, self.0)
+                .expect_fn(|err| panic!("{0}", err))
+                .get(f);
+        });
+        *self
+    }
+
+    pub fn comp_ret<T: AbstractComponent, U>(&self, f: impl FnOnce(&T) -> U) -> U {
+        assert!(std::mem::size_of::<T>() > 0);
+        archetypes_mut(|archetypes| {
+            let id = archetypes.component_id::<T>();
+            archetypes
+                .get_component(id, self.0)
+                .expect_fn(|_| {
+                    panic!(
+                        "expected entity to have component {0}",
+                        tynm::type_name::<T>()
+                    )
+                })
+                .get(f)
+        })
+    }
+
+    pub fn comp_mut_ret<T: AbstractComponent, U>(&self, f: impl FnOnce(&mut T) -> U) -> U {
+        assert!(std::mem::size_of::<T>() > 0);
+        archetypes_mut(|archetypes| {
+            let id = archetypes.component_id::<T>();
+            archetypes
+                .get_component(id, self.0)
+                .expect_fn(|_| {
+                    panic!(
+                        "expected entity to have component {0}",
+                        tynm::type_name::<T>()
+                    )
+                })
+                .get_mut(f)
+        })
+    }
+
     pub fn comps<T: ComponentQuery>(&self, f: impl FnOnce(T::Item<'_>)) -> Entity {
         f(T::fetch(self));
         *self
@@ -586,14 +661,6 @@ impl Entity {
 
     pub fn comps_ret<T: ComponentQuery, R>(&self, f: impl FnOnce(T::Item<'_>) -> R) -> R {
         f(T::fetch(self))
-    }
-
-    pub fn try_get_comp<T: AbstractComponent>(&self) -> Option<ComponentGetter<T>> {
-        assert!(std::mem::size_of::<T>() > 0);
-        archetypes_mut(|archetypes| {
-            let id = archetypes.component_id::<T>();
-            archetypes.get_component(id, self.0)
-        })
     }
 
     pub fn has_children(&self) -> bool {
@@ -663,6 +730,7 @@ impl Entity {
 
 #[cfg(test)]
 mod tests {
+    use std::error::Error;
     use std::hash::{DefaultHasher, Hasher};
 
     use archetypes::{Wildcard, ENTITY_ID};
@@ -899,11 +967,12 @@ mod tests {
             .add_entity()
             .add_comp((Position::new(1, 2), Velocity::new(3, 4)));
 
-        let pos = e.get_comp::<Position>().get(|c| *c);
-        let vel = e.get_comp::<Velocity>().get(|c| *c);
+        let pos = e.comp_ret(|p: &Position| *p);
+        let vel = e.comp_ret(|v: &Velocity| *v);
 
         assert_eq!(pos.x + pos.y + vel.x + vel.y, 10);
     }
+
     #[test]
     fn wildcard_data_query() {
         return;
@@ -933,17 +1002,19 @@ mod tests {
         world.register_components::<(Velocity, Position, IsCool, Likes, Apples, Owes, Begin)>();
 
         let e = world.add_entity();
-        e.get_or_add_comp(|| Position::new(1, 2));
-        e.get_comp::<Position>().get_mut(|p| {
-            assert_eq!(p.x, 1);
-            assert_eq!(p.y, 2);
-
-            p.x += 1;
-        });
-
-        e.get_or_add_comp(|| Position::new(1, 2)).get(|p| {
-            assert_eq!(p.x, 2);
-        });
+        e.get_or_add_comp_mut(
+            || Position::new(1, 2),
+            |pos| {
+                assert_eq!(pos.x + pos.y, 3);
+                pos.x += 1;
+            },
+        );
+        e.get_or_add_comp(
+            || Position::new(1, 2),
+            |p| {
+                assert_eq!(p.x, 2);
+            },
+        );
     }
 
     #[test]
@@ -952,14 +1023,14 @@ mod tests {
         world.register_components::<(Velocity, Position, IsCool, Likes, Apples, Owes, Begin)>();
 
         world.on_comp_add::<Position>(|entity: Entity, _| {
-            entity.get_comp::<Position>().get_mut(|p| p.x += 1);
+            entity.comp_mut::<Position>(|p| p.x += 1);
         });
 
         let e = world
             .add_entity()
             .add_comp::<Position>(Position { x: 0, y: 0 });
 
-        e.get_comp::<Position>().get(|p| {
+        e.comp::<Position>(|p| {
             assert_eq!(p.x, 1);
         });
     }
@@ -992,11 +1063,11 @@ mod tests {
             assert!(e.has_comp::<Position>());
             assert!(!e.has_tag::<IsCool>());
             assert!(e.has_comp::<Velocity>());
-            e.get_comp::<Position>().get(|p| {
+            e.comp::<Position>(|p| {
                 assert_eq!(p.x, 11);
                 assert_eq!(p.y, 16);
             });
-            e.get_comp::<Velocity>().get(|p| {
+            e.comp::<Velocity>(|p| {
                 assert_eq!(p.x, 1);
                 assert_eq!(p.y, 5);
             });
@@ -1029,7 +1100,7 @@ mod tests {
 
         e1.add_comp(Position { x: 3, y: 3 });
 
-        e1.get_comp::<Position>().get(|p| {
+        e1.comp::<Position>(|p| {
             assert_eq!(p.x, 3);
             assert_eq!(p.y, 3);
         });
@@ -1445,8 +1516,8 @@ mod tests {
             pos.y = 1;
         }
 
-        let pos_sum_1 = e1.get_comp::<Position>().get(|p| p.x + p.y);
-        let pos_sum_2 = e2.get_comp::<Position>().get(|p| p.x + p.y);
+        let pos_sum_1 = e1.comp_ret(|p: &Position| p.x + p.y);
+        let pos_sum_2 = e2.comp_ret(|p: &Position| p.x + p.y);
         assert_eq!(pos_sum_1 + pos_sum_2, 22);
 
         let combined_query = world.query::<(&Position, &Velocity)>();
@@ -1479,7 +1550,7 @@ mod tests {
 
         let instance = world.add_entity().instance_of(prefab);
         assert!(instance.has_mixed_rel::<InstanceOf>(prefab));
-        instance.get_comp::<Velocity>().get(|p| {
+        instance.comp::<Velocity>(|p| {
             assert_eq!(p.x, 10);
             assert_eq!(p.y, 20);
         });
@@ -1517,7 +1588,7 @@ mod tests {
         assert!(entity.has_ent_rel(hates, bob));
         assert!(entity.has_mixed_rel::<Position>(idkwhat));
 
-        entity.get_comp::<Position>().get(|pos| {
+        entity.comp::<Position>(|pos| {
             assert_eq!(pos.x, 3);
             assert_eq!(pos.y, 4);
         });
@@ -1612,7 +1683,7 @@ mod tests {
         assert!(entity.has_mixed_rel::<Position>(idkwhat));
         assert!(entity.has_mixed_rel::<Likes>(bob));
 
-        entity.get_comp::<Position>().get(|pos| {
+        entity.comp::<Position>(|pos| {
             assert_eq!(pos.x, 3);
             assert_eq!(pos.y, 4);
         });
@@ -1689,7 +1760,7 @@ mod tests {
         entity.add_rel::<Likes, Apples>();
         entity.add_comp(Position { x: 10, y: 20 });
 
-        let pos = entity.get_comp::<Position>().get(|c| *c);
+        let pos = entity.comp_ret(|c: &Position| *c);
         assert_eq!(pos.x, 10);
         assert_eq!(pos.y, 20);
 
@@ -1740,6 +1811,7 @@ mod tests {
     fn deserialization() {
         let json = json!(
         {
+            "Name": "John",
             "($Owes, Apples)": {
                 "amount": 10
             },
@@ -1752,13 +1824,39 @@ mod tests {
                 "y": 2
             },
             "Tags": [
+                "#Enemy",
                 "IsCool",
-                "(Likes, Apples)"
+                "(Likes, #Enemy)",
+                "(Likes, Apples)",
             ]
         });
         let world = World::new();
         world.register_components::<(Likes, Apples, IsCool, Position, Begin, Owes)>();
-        let entity = world.deserialize_entity(&json.to_string());
+        let entity = world
+            .deserialize_entity(&json.to_string())
+            .map_err(|e| e.to_string())
+            .unwrap();
+        entity.comp::<Position>(|p| {
+            assert_eq!(p.x, 1);
+            assert_eq!(p.y, 2);
+        });
+        //TODO: unite and add missing get/get_mut methods
+        let enemy = world.entity_by_global_name("Enemy").unwrap();
+        let mut enemy = enemy.0.unpack();
+        enemy.high32.is_target = false;
+        let enemy = Entity(enemy.into());
+        entity
+            .rel_first::<Owes, Apples>()
+            .get(|owes| assert_eq!(owes.amount, 10));
+        entity
+            .rel_second::<Begin, Position>()
+            .get(|pos| assert_eq!(pos.x + pos.y, 5));
+        entity.comp::<Position>(|pos| assert_eq!(pos.x + pos.y, 3));
+        entity.name().get(|n| assert!(n == "John"));
+        assert!(entity.has_tag::<IsCool>());
+        assert!(entity.has_rel::<Likes, Apples>());
+        assert!(entity.has_mixed_rel::<Likes>(enemy));
+        assert!(entity.has_ent_tag(enemy));
     }
     #[test]
     fn serialization() {
@@ -1771,17 +1869,16 @@ mod tests {
 
         let world = World::new();
         world.register_components::<(MyEnumTag, Position, IsCool, Likes, Apples, Owes, Begin)>();
-        let entity_tag = world.add_entity_named("A tag");
-        let child = world.add_entity();
+        let enemy = world.add_entity_named("Enemy");
         let entity = world
-            .add_entity()
+            .add_entity_named("John")
+            .add_rel_first::<_, Apples>(Owes { amount: 10 })
+            .add_rel_second::<Begin, _>(Position::new(2, 3))
             .add_comp(Position::new(1, 2))
             .add_tag::<IsCool>()
-            .add_ent_tag(entity_tag)
+            .add_ent_tag(enemy)
             .add_rel::<Likes, Apples>()
-            .add_child_of(child)
-            .add_rel_first::<Owes, Apples>(Owes { amount: 10 })
-            .add_rel_second::<Begin, _>(Position::new(2, 3))
+            .add_mixed_tag_rel::<Likes>(enemy)
             .serialize()
             .unwrap();
         println!("{entity}");
