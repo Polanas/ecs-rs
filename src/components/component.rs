@@ -1,47 +1,197 @@
 use bevy_ptr::Ptr;
 use bevy_reflect::Reflect;
+use macro_rules_attribute::apply;
 use std::{any::Any, cell::RefMut, fmt::Debug};
-
 use crate::{systems::EnumId, table::Storage};
 
 #[macro_export]
-macro_rules! impl_component {
+macro_rules! Component {
+    //Named variant
+    (@return $table:ident $enum_name:ident $var_name:ident { $($field_name:ident: $field_ty:ty),* $(,)?}) => {
+        return Ok(
+            $enum_name::$var_name {
+                $(
+                    $field_name: $table.get(stringify!($field_name))?
+                ),*
+            }
+        )
+    };
+    //Tuple variant
+    (@return $table:ident $enum_name:ident $var_name:ident ($($field_ty:ty),*)) => {
+        return Ok(
+            $enum_name::$var_name {
+                $(
+                    ${ignore($field_ty)}
+                    ${index()}: $table.get(${index()} + 1)?
+                ),*
+            }
+        )
+    };
+    (@return $table:ident $enum_name:ident $var_name:ident)  => {};
+    //Named variant
+    (@set $self: ident $table:ident $enum_name:ident $var_name:ident { $($field_name:ident: $field_ty:ty),* $(,)?}) => {
+        if let $enum_name::$var_name {
+            $($field_name),*
+        } = $self {
+            $(
+                $table.set(stringify!($field_name), $field_name)?;
+            )*
+        }
+    };
+    //Tuple variant
+    (@set $self:ident $table:ident $enum_name:ident $var_name:ident ($($field_ty:ty),*)) => {
+        if let $enum_name::$var_name($(
+                ${ignore($field_ty)}
+                paste::paste!([<$var_name _ ${index()}>])
+        ),+) = $self {
+            $(
+                ${ignore($field_ty)}
+                $table.set(${index()} + 1, paste::paste!([<$var_name _ ${index()}>]))?;
+                // $table.set(0,10)?;
+            )+
+        }
+    };
+    //Unit variant
+    (@set $self:ident $table:ident $enum_name:ident $var_name:ident) => {};
+    // VariantName
     (
+        $vis:vis,
         $( #[$meta:meta] )*
-    //  ^~~~attributes~~~~^
-        $vis:vis struct $name:ident (
-            $(
-                $( #[$field_meta:meta] )*
-    //          ^~~~field attributes~~~~^
-                $field_vis:vis $field_ty:ty
-    //          ^~~~~~a single field~~~~~~^
-            ),*
-        $(,)? );
-    ) => {
+        $name:ident
+        @variants [
+            $($variants:tt)*
+        ]
+        @parsing
+            $( #[$var_meta:meta] )*
+            $VariantName:ident
+            $(, $($input:tt)*)?
+    ) => (Component! {
+        $vis,
         $( #[$meta] )*
-        #[derive(Clone, bevy_reflect::Reflect, serde::Serialize, serde::Deserialize)]
-        $vis struct $name (
-            $(
-                $( #[$field_meta] )*
-                $field_vis $field_ty
-            ),*
-        );
+        $name
+        @variants [
+            $($variants)*
+            {
+                $( #[$var_meta] )*
+                $VariantName
+            }
+        ]
+        @parsing
+            $( $($input)* )?
+    });
 
+    // VariantName(...)
+    (
+        $vis:vis,
+        $( #[$meta:meta] )*
+        $name:ident
+        @variants [
+            $($variants:tt)*
+        ]
+        @parsing
+            $( #[$var_meta:meta] )*
+            $VariantName:ident ( $($tt:tt)* )
+            $(, $($input:tt)*)?
+    ) => (Component! {
+        $vis,
+        $( #[$meta] )*
+        $name
+        @variants [
+            $($variants)*
+            {
+                $( #[$var_meta] )*
+                $VariantName ($($tt)*)
+            }
+        ]
+        @parsing
+            $( $($input)* )?
+    });
+
+    // VariantName { ... }
+    (
+        $vis:vis,
+        $( #[$meta:meta] )*
+        $name:ident
+        @variants [
+            $($variants:tt)*
+        ]
+        @parsing
+            $( #[$var_meta:meta] )*
+            $VariantName:ident { $($tt:tt)* }
+            $(, $($input:tt)*)?
+    ) => (Component! {
+        $vis,
+        $( #[$meta] )*
+        $name
+        @variants [
+            $($variants)*
+            {
+                $( #[$var_meta] )*
+                $VariantName { $($tt)* }
+            }
+        ]
+        @parsing
+            $( $($input)* )?
+    });
+
+    // Done parsing, time to generate code:
+    (
+        $vis:vis,
+        $( #[$meta:meta] )*
+        $name:ident
+        @variants [
+            $(
+                {
+                    $( #[$var_meta:meta] )*
+                    $VariantName:ident $($variant_assoc:tt)?
+                }
+            )*
+        ]
+        @parsing
+            // Nothing left to parse
+    ) => (
+        $( #[$meta] )*
+        #[macro_rules_attribute::apply($crate::FromIntoLua)]
+        #[derive(educe::Educe)]
+        #[educe(Debug)]
+        #[derive(Clone, bevy_reflect::Reflect, serde::Serialize, serde::Deserialize)]
+        $vis enum $name {
+            $(
+                $VariantName $(
+                    $variant_assoc
+                )? ,
+            )*
+        }
         impl $crate::components::component::AbstractComponent for $name {
+            fn to_debug_string(value: bevy_ptr::Ptr<'_>) -> String {
+                format!("{:#?}",unsafe {value.deref::<$name>()})
+            }
+
             fn clone_into(
-                value: bevy_ptr::Ptr<'_>,
-                mut storage: std::cell::RefMut<$crate::table::Storage>,
+                index: usize,
+                src: Option<std::cell::RefMut<$crate::table::Storage>>,
+                mut dst: std::cell::RefMut<$crate::table::Storage>,
             ) {
-                let value = unsafe { value.deref::<$name>() };
-                storage.push(value.clone());
+                let value = unsafe {
+                        if let Some(src) = src {
+                            let ptr = src.0.get_checked(index);
+                            ptr.deref::<$name>().clone()
+                        }
+                        else {
+                            let ptr = dst.0.get_checked(index);
+                            ptr.deref::<$name>().clone()
+                        }
+                };
+                dst.push(value);
             }
-            fn as_reflect_ref(value: bevy_ptr::Ptr<'_>, f: &dyn Fn(Option<&dyn bevy_reflect::Reflect>)) {
+
+            fn as_reflect_ref(value: bevy_ptr::Ptr<'_>) -> Option<&dyn bevy_reflect::Reflect>  {
                 let value = unsafe { value.deref::<$name>() };
-                f(Some(value as &dyn bevy_reflect::Reflect));
+                (Some(value as &dyn bevy_reflect::Reflect))
             }
-            fn as_reflect_mut(value: bevy_ptr::PtrMut<'_>, f: &dyn Fn(Option<&mut dyn bevy_reflect::Reflect>)) {
+            fn as_reflect_mut(value: bevy_ptr::PtrMut<'_>) -> Option<&mut dyn bevy_reflect::Reflect>  {
                 let value = unsafe { value.deref_mut::<$name>() };
-                f(Some(value as &mut dyn bevy_reflect::Reflect));
+                (Some(value as &mut dyn bevy_reflect::Reflect))
             }
             fn serialize(value: bevy_ptr::Ptr<'_>) -> Result<serde_json::Value, serde_json::error::Error> {
                 let value = unsafe { value.deref::<$name>() };
@@ -55,6 +205,193 @@ macro_rules! impl_component {
                 let value = serde_json::from_value::<Self>(value)?;
                 storage.push(value);
                 Ok(())
+            }
+
+            fn into_lua<'a>(value: bevy_ptr::Ptr<'_>, lua: &'a mlua::Lua) -> mlua::Result<mlua::Value<'a>> {
+                let value = unsafe { value.deref::<$name>() };
+                mlua::LuaSerdeExt::to_value(lua, &value)
+            }
+
+            fn from_lua<'lua>(mlua_value: mlua::Value<'lua>, mut storage: std::cell::RefMut<$crate::table::Storage>, lua: &'lua mlua::Lua) -> mlua::Result<()> {
+                match mlua::LuaSerdeExt::from_value::<$name>(lua, mlua_value) {
+                    Ok(new_value) => {
+                        storage.push(new_value);
+                        Ok(())
+                    },
+                    Err(error) => Err(error)
+                }
+            }
+        }
+
+    );
+
+            // == ENTRY POINT ==
+            (
+                $( #[$meta:meta] )*
+                $vis:vis enum $name:ident {
+                    $($tt:tt)*
+                }
+            ) => (Component! {
+                $vis,
+                $( #[$meta] )*
+                $name
+                // a sequence of brace-enclosed variants
+                @variants []
+                // remaining tokens to parse
+                @parsing
+                    $($tt)*
+            });
+    (
+        $( #[$meta:meta] )*
+        $vis:vis struct $name:ident;
+    ) => {
+        #[macro_rules_attribute::apply($crate::FromIntoLua)]
+        #[derive(educe::Educe)]
+        #[educe(Debug)]
+        #[derive(Clone, bevy_reflect::Reflect, serde::Serialize, serde::Deserialize)]
+        $( #[$meta] )*
+        $vis struct $name;
+
+        impl $crate::components::component::AbstractComponent for $name {
+            fn to_debug_string(value: bevy_ptr::Ptr<'_>) -> String {
+                format!("{:#?}",unsafe {value.deref::<$name>()})
+            }
+
+            fn clone_into(
+                index: usize,
+                src: Option<std::cell::RefMut<$crate::table::Storage>>,
+                mut dst: std::cell::RefMut<$crate::table::Storage>,
+            ) {
+                let value = unsafe {
+                        if let Some(src) = src {
+                            let ptr = src.0.get_checked(index);
+                            ptr.deref::<$name>().clone()
+                        }
+                        else {
+                            let ptr = dst.0.get_checked(index);
+                            ptr.deref::<$name>().clone()
+                        }
+                };
+                dst.push(value);
+            }
+
+            fn as_reflect_ref(value: bevy_ptr::Ptr<'_>) -> Option<&dyn bevy_reflect::Reflect>  {
+                let value = unsafe { value.deref::<$name>() };
+                (Some(value as &dyn bevy_reflect::Reflect))
+            }
+            fn as_reflect_mut(value: bevy_ptr::PtrMut<'_>) -> Option<&mut dyn bevy_reflect::Reflect>  {
+                let value = unsafe { value.deref_mut::<$name>() };
+                (Some(value as &mut dyn bevy_reflect::Reflect))
+            }
+            fn serialize(value: bevy_ptr::Ptr<'_>) -> Result<serde_json::Value, serde_json::error::Error> {
+                let value = unsafe { value.deref::<$name>() };
+                serde_json::to_value(&value)
+            }
+
+            fn deserialize(
+                value: serde_json::Value,
+                mut storage: std::cell::RefMut<$crate::table::Storage>,
+            ) -> serde_json::Result<()> {
+                let value = serde_json::from_value::<Self>(value)?;
+                storage.push(value);
+                Ok(())
+            }
+
+            fn into_lua<'a>(value: bevy_ptr::Ptr<'_>, lua: &'a mlua::Lua) -> mlua::Result<mlua::Value<'a>> {
+                let value = unsafe { value.deref::<$name>() };
+                mlua::LuaSerdeExt::to_value(lua, &value)
+            }
+
+            fn from_lua<'lua>(mlua_value: mlua::Value<'lua>, mut storage: std::cell::RefMut<$crate::table::Storage>, lua: &'lua mlua::Lua) -> mlua::Result<()> {
+                match mlua::LuaSerdeExt::from_value::<$name>(lua, mlua_value) {
+                    Ok(new_value) => {
+                        storage.push(new_value);
+                        Ok(())
+                    },
+                    Err(error) => Err(error)
+                }
+            }
+        }
+    };
+    (
+        $( #[$meta:meta] )*
+        $vis:vis struct $name:ident (
+            $(
+                $( #[$field_meta:meta] )*
+                $field_vis:vis $field_ty:ty
+            ),*
+        $(,)? );
+    ) => {
+        #[macro_rules_attribute::apply($crate::FromIntoLua)]
+        #[derive(educe::Educe)]
+        #[educe(Debug)]
+        #[derive(Clone, bevy_reflect::Reflect, serde::Serialize, serde::Deserialize)]
+        $( #[$meta] )*
+        $vis struct $name (
+            $(
+                $( #[$field_meta] )*
+                $field_vis $field_ty
+            ),*
+        );
+
+        impl $crate::components::component::AbstractComponent for $name {
+            fn to_debug_string(value: bevy_ptr::Ptr<'_>) -> String {
+                format!("{:#?}",unsafe {value.deref::<$name>()})
+            }
+
+            fn clone_into(
+                index: usize,
+                src: Option<std::cell::RefMut<$crate::table::Storage>>,
+                mut dst: std::cell::RefMut<$crate::table::Storage>,
+            ) {
+                let value = unsafe {
+                        if let Some(src) = src {
+                            let ptr = src.0.get_checked(index);
+                            ptr.deref::<$name>().clone()
+                        }
+                        else {
+                            let ptr = dst.0.get_checked(index);
+                            ptr.deref::<$name>().clone()
+                        }
+                };
+                dst.push(value);
+            }
+
+            fn as_reflect_ref(value: bevy_ptr::Ptr<'_>) -> Option<&dyn bevy_reflect::Reflect>  {
+                let value = unsafe { value.deref::<$name>() };
+                (Some(value as &dyn bevy_reflect::Reflect))
+            }
+            fn as_reflect_mut(value: bevy_ptr::PtrMut<'_>) -> Option<&mut dyn bevy_reflect::Reflect>  {
+                let value = unsafe { value.deref_mut::<$name>() };
+                (Some(value as &mut dyn bevy_reflect::Reflect))
+            }
+            fn serialize(value: bevy_ptr::Ptr<'_>) -> Result<serde_json::Value, serde_json::error::Error> {
+                let value = unsafe { value.deref::<$name>() };
+                serde_json::to_value(&value)
+            }
+
+            fn deserialize(
+                value: serde_json::Value,
+                mut storage: std::cell::RefMut<$crate::table::Storage>,
+            ) -> serde_json::Result<()> {
+                let value = serde_json::from_value::<Self>(value)?;
+                storage.push(value);
+                Ok(())
+            }
+
+            fn into_lua<'a>(value: bevy_ptr::Ptr<'_>, lua: &'a mlua::Lua) -> mlua::Result<mlua::Value<'a>> {
+                let value = unsafe { value.deref::<$name>() };
+                mlua::LuaSerdeExt::to_value(lua, &value)
+            }
+
+            fn from_lua<'lua>(mlua_value: mlua::Value<'lua>, mut storage: std::cell::RefMut<$crate::table::Storage>, lua: &'lua mlua::Lua) -> mlua::Result<()> {
+                match mlua::LuaSerdeExt::from_value::<$name>(lua, mlua_value) {
+                    Ok(new_value) => {
+                        storage.push(new_value);
+                        Ok(())
+                    },
+                    Err(error) => Err(error)
+                }
             }
         }
     };
@@ -67,30 +404,48 @@ macro_rules! impl_component {
             ),*
         $(,)? }
     } => {
-        $( #[$meta] )*
+        #[macro_rules_attribute::apply($crate::FromIntoLua)]
+        #[derive(educe::Educe)]
+        #[educe(Debug)]
         #[derive(Clone, bevy_reflect::Reflect, serde::Serialize, serde::Deserialize)]
+        $( #[$meta] )*
         $vis struct $name {
             $(
                 $( #[$field_meta] )*
                 $field_vis $field_name : $field_ty
             ),*
         }
+
         impl $crate::components::component::AbstractComponent for $name {
-            fn clone_into(
-                value: bevy_ptr::Ptr<'_>,
-                mut storage: std::cell::RefMut<$crate::table::Storage>,
-            ) {
-                let value = unsafe { value.deref::<$name>() };
-                storage.push(value.clone());
+            fn to_debug_string(value: bevy_ptr::Ptr<'_>) -> String {
+                format!("{:#?}",unsafe {value.deref::<$name>()})
             }
 
-            fn as_reflect_ref(value: bevy_ptr::Ptr<'_>, f: &dyn Fn(Option<&dyn bevy_reflect::Reflect>)) {
-                let value = unsafe { value.deref::<$name>() };
-                f(Some(value as &dyn bevy_reflect::Reflect));
+            fn clone_into(
+                index: usize,
+                src: Option<std::cell::RefMut<$crate::table::Storage>>,
+                mut dst: std::cell::RefMut<$crate::table::Storage>,
+            ) {
+                let value = unsafe {
+                        if let Some(src) = src {
+                            let ptr = src.0.get_checked(index);
+                            ptr.deref::<$name>().clone()
+                        }
+                        else {
+                            let ptr = dst.0.get_checked(index);
+                            ptr.deref::<$name>().clone()
+                        }
+                };
+                dst.push(value);
             }
-            fn as_reflect_mut(value: bevy_ptr::PtrMut<'_>, f: &dyn Fn(Option<&mut dyn bevy_reflect::Reflect>)) {
+
+            fn as_reflect_ref(value: bevy_ptr::Ptr<'_>) -> Option<&dyn bevy_reflect::Reflect>  {
+                let value = unsafe { value.deref::<$name>() };
+                (Some(value as &dyn bevy_reflect::Reflect))
+            }
+            fn as_reflect_mut(value: bevy_ptr::PtrMut<'_>) -> Option<&mut dyn bevy_reflect::Reflect>  {
                 let value = unsafe { value.deref_mut::<$name>() };
-                f(Some(value as &mut dyn bevy_reflect::Reflect));
+                (Some(value as &mut dyn bevy_reflect::Reflect))
             }
 
             fn serialize(value: bevy_ptr::Ptr<'_>) -> Result<serde_json::Value, serde_json::error::Error> {
@@ -106,6 +461,21 @@ macro_rules! impl_component {
                 storage.push(value);
                 Ok(())
             }
+
+            fn into_lua<'a>(value: bevy_ptr::Ptr<'_>, lua: &'a mlua::Lua) -> mlua::Result<mlua::Value<'a>> {
+                let value = unsafe { value.deref::<$name>() };
+                <$name as mlua::IntoLua>::into_lua(value.clone(), lua)
+            }
+
+            fn from_lua<'lua>(mlua_value: mlua::Value<'lua>, mut storage: std::cell::RefMut<$crate::table::Storage>, lua: &'lua mlua::Lua) -> mlua::Result<()> {
+                match <$name as mlua::FromLua>::from_lua(mlua_value, lua) {
+                    Ok(new_value) => {
+                        storage.push(new_value);
+                        Ok(())
+                    },
+                    Err(error) => Err(error)
+                }
+            }
         }
     }
 }
@@ -115,7 +485,8 @@ macro_rules! impl_system_state {
     ($t:ty) => {
         impl $crate::systems::SystemState for $t {
             fn id(&self) -> $crate::systems::EnumId {
-                let mut hasher = DefaultHasher::new();
+                use std::hash::{Hash, Hasher};
+                let mut hasher = std::hash::DefaultHasher::new();
                 std::mem::discriminant(self).hash(&mut hasher);
                 hasher.finish()
             }
@@ -134,32 +505,47 @@ macro_rules! impl_system_states {
     };
 }
 #[macro_export]
-macro_rules! enum_tag {
+macro_rules! EnumTag {
     ($(#[$meta:meta])? $vis:vis enum $name:ident {
         $($(#[$vmeta:meta])? $vname:ident $(,)?)*
     }) => {
         $(#[$meta])?
+        #[derive(educe::Educe)]
+        #[educe(Debug)]
         #[derive(Clone, Copy, bevy_reflect::Reflect, serde::Serialize, serde::Deserialize)]
         $vis enum $name {
             $($(#[$vmeta])? $vname,)*
         }
 
         impl $crate::components::component::AbstractComponent for $name {
-            fn clone_into(
-                value: bevy_ptr::Ptr<'_>,
-                mut storage: std::cell::RefMut<$crate::table::Storage>,
-            ) {
-                let value = unsafe { value.deref::<$name>() };
-                storage.push(value.clone());
+            fn to_debug_string(value: bevy_ptr::Ptr<'_>) -> String {
+                format!("{:#?}",unsafe {value.deref::<$name>()})
             }
 
-            fn as_reflect_ref(value: bevy_ptr::Ptr<'_>, f: &dyn Fn(Option<&dyn bevy_reflect::Reflect>)) {
-                let value = unsafe { value.deref::<$name>() };
-                f(Some(value as &dyn bevy_reflect::Reflect));
+            fn clone_into(
+                index: usize,
+                src: Option<std::cell::RefMut<$crate::table::Storage>>,
+                mut dst: std::cell::RefMut<$crate::table::Storage>,
+            ) {
+                let value = unsafe {
+                        if let Some(src) = src {
+                            let ptr = src.0.get_checked(index);
+                            ptr.deref::<$name>().clone()
+                        }
+                        else {
+                            let ptr = dst.0.get_checked(index);
+                            ptr.deref::<$name>().clone()
+                        }
+                };
+                dst.push(value);
             }
-            fn as_reflect_mut(value: bevy_ptr::PtrMut<'_>, f: &dyn Fn(Option<&mut dyn bevy_reflect::Reflect>)) {
+            fn as_reflect_ref(value: bevy_ptr::Ptr<'_>) -> Option<&dyn bevy_reflect::Reflect>  {
+                let value = unsafe { value.deref::<$name>() };
+                (Some(value as &dyn bevy_reflect::Reflect))
+            }
+            fn as_reflect_mut(value: bevy_ptr::PtrMut<'_>) -> Option<&mut dyn bevy_reflect::Reflect>  {
                 let value = unsafe { value.deref_mut::<$name>() };
-                f(Some(value as &mut dyn bevy_reflect::Reflect));
+                (Some(value as &mut dyn bevy_reflect::Reflect))
             }
             fn serialize(value: bevy_ptr::Ptr<'_>) -> Result<serde_json::Value, serde_json::error::Error> {
                 let value = unsafe { value.deref::<$name>() };
@@ -174,7 +560,23 @@ macro_rules! enum_tag {
                 storage.push(value);
                 Ok(())
             }
+
+            fn into_lua<'a>(value: bevy_ptr::Ptr<'_>, lua: &'a mlua::Lua) -> mlua::Result<mlua::Value<'a>> {
+                let value = unsafe { value.deref::<$name>() };
+                mlua::LuaSerdeExt::to_value(lua, &value)
+            }
+
+            fn from_lua<'lua>(mlua_value: mlua::Value<'lua>, mut storage: std::cell::RefMut<$crate::table::Storage>, lua: &'lua mlua::Lua) -> mlua::Result<()> {
+                match mlua::LuaSerdeExt::from_value::<$name>(lua, mlua_value) {
+                    Ok(new_value) => {
+                        storage.push(new_value);
+                        Ok(())
+                    },
+                    Err(error) => Err(error)
+                }
+            }
         }
+
 
         impl $crate::components::component::EnumTag for $name {
             fn id(&self) -> $crate::systems::EnumId {
@@ -196,15 +598,32 @@ macro_rules! enum_tag {
         }
     };
 }
+
+#[apply(Component)]
+enum TestEnum {
+    TupleVariant,
+    #[reflect(ignore)]
+    TupleVariant2(i32, u32),
+    NamedVariant { name: i32 },
+}
+
 pub trait AbstractComponent: 'static + Sized {
-    fn clone_into(value: Ptr<'_>, storage: RefMut<Storage>);
-    fn as_reflect_ref(value: bevy_ptr::Ptr<'_>, f: &dyn Fn(Option<&dyn Reflect>));
-    fn as_reflect_mut(value: bevy_ptr::PtrMut<'_>, f: &dyn Fn(Option<&mut dyn Reflect>));
+    fn to_debug_string(value: bevy_ptr::Ptr<'_>) -> String;
+    fn clone_into(index: usize, src: Option<RefMut<Storage>>, dst: RefMut<Storage>);
+    fn as_reflect_ref(value: bevy_ptr::Ptr<'_>) -> Option<&dyn Reflect>;
+    fn as_reflect_mut(value: bevy_ptr::PtrMut<'_>) -> Option<&mut dyn Reflect>;
     fn serialize(value: bevy_ptr::Ptr<'_>) -> Result<serde_json::Value, serde_json::error::Error>;
-    fn deserialize(
-        value: serde_json::Value,
+    fn deserialize(value: serde_json::Value, storage: RefMut<Storage>) -> serde_json::Result<()>;
+    fn into_lua<'lua>(
+        value: bevy_ptr::Ptr<'_>,
+        lua: &'lua mlua::Lua,
+    ) -> mlua::Result<mlua::Value<'lua>>;
+    fn from_lua<'lua>(
+        mlua_value: mlua::Value<'lua>,
         storage: RefMut<Storage>,
-    ) -> serde_json::Result<()>;
+        lua: &'lua mlua::Lua,
+    ) -> mlua::Result<()>;
+    // fn from_lua(value: bevy_ptr::PtrMut<'_>, table: mlua::Table);
 }
 pub trait EnumTag: AbstractComponent + 'static {
     fn id(&self) -> EnumId;

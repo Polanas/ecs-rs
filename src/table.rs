@@ -3,12 +3,15 @@ use std::{
     cell::{Cell, RefCell, RefMut},
     collections::BTreeSet,
     hash::Hash,
+    ops::Range,
+    ptr::NonNull,
     rc::Rc,
 };
 
 use bevy_ptr::{OwningPtr, Ptr, PtrMut};
 
 use bevy_utils::HashMap;
+use egui::TextBuffer;
 
 use crate::{
     archetype::{Archetype, ArchetypeAdd, ArchetypeRow},
@@ -95,11 +98,24 @@ impl Storage {
 
 pub type StorageCell = Rc<RefCell<Storage>>;
 
+#[derive(Debug, Clone, Copy, Default)]
+///Used to avoid aliasing caused by multiple queries trying to access the same table mutably
+pub enum BorrowState {
+    #[default]
+    NotUsed,
+    Borrowed,
+    BorrowedMut,
+}
+
 pub struct Table {
+    borrow_state: BorrowState,
     storages: Vec<StorageCell>,
+    //maybe replace with IdentifierStripped?
     storage_indices: HashMap<Identifier, usize>,
     components: Identifiers,
-    entity_indices: Vec<usize>,
+    //it's okay to only store id and not generation, as there will never be two entites with the
+    //same id
+    entity_indices: Vec<u32>,
     registry: Rc<RefCell<MyTypeRegistry>>,
     id: TableId,
     count: usize,
@@ -110,7 +126,6 @@ impl Hash for Table {
         self.id().hash(state)
     }
 }
-
 impl Table {
     pub(crate) fn new(ids: &Identifiers, registry: Rc<RefCell<MyTypeRegistry>>) -> Self {
         let registry_ref = registry.borrow();
@@ -153,11 +168,8 @@ impl Table {
             storages,
             id: table_id(),
             count: 0,
+            borrow_state: BorrowState::default()
         }
-    }
-
-    pub fn component_ids(&self) -> &Identifiers {
-        &self.components
     }
 
     pub fn has_storage_typed<T: 'static>(&self, id: Identifier) -> bool {
@@ -181,7 +193,7 @@ impl Table {
         self.storages.get(*storage_id).is_some()
     }
 
-    pub fn push_entity(&mut self, index: usize) -> TableRow {
+    pub fn push_entity(&mut self, index: u32) -> TableRow {
         self.entity_indices.push(index);
         self.count += 1;
         TableRow(self.count - 1)
@@ -204,7 +216,7 @@ impl Table {
 
     pub fn push_component_ptr(&mut self, component: Identifier, value: OwningPtr) -> Option<()> {
         let storage = self.storage(component)?;
-        //SAFETY: out of bounds checked, correct align checked, everthing else checked
+        //SAFETY: out of bounds checked, correct align checked
         unsafe {
             storage.borrow_mut().0.push(value);
         }
@@ -216,15 +228,15 @@ impl Table {
             return;
         }
         let row = row.0;
-        for storage in self.storages.iter() {
-            let mut storage = storage.borrow_mut();
-            // assert!(row < storage.len());
-            if row >= storage.len() {
-                continue;
-            }
-            //SAFETY: out of bounds checked
-            let _ = unsafe { storage.0.swap_remove_and_forget_unchecked(row) };
-        }
+        // for storage in self.storages.iter() {
+        //     let mut storage = storage.borrow_mut();
+        //     // assert!(row < storage.len());
+        //     if row >= storage.len() {
+        //         continue;
+        //     }
+        //     //SAFETY: out of bounds checked
+        //     let _ = unsafe { storage.0.swap_remove_and_forget_unchecked(row) };
+        // }
 
         self.count -= 1;
         let removed = self.entity_indices.swap_remove(row);
@@ -278,7 +290,7 @@ impl Table {
         self.id
     }
 
-    pub fn entity_indices(&self) -> &[usize] {
+    pub fn entity_indices(&self) -> &[u32] {
         &self.entity_indices[..]
     }
 
@@ -290,35 +302,111 @@ impl Table {
             .cloned()
     }
 
-    pub fn debug_print(&self, _archetypes: &Archetypes) {
-        todo!()
-        // println!("Table {:?} {{", self.id.0);
-        // let registry = self.registry.borrow();
-        // for component in self.components.iter() {
-        //     let type_name = if let (Some(relation), Some(target)) = (
-        //         archetypes.relation_entity(*component),
-        //         archetypes.target_entity(*component),
-        //     ) {
-        //         let relation_name = registry
-        //             .type_names
-        //             .get(&relation.low32())
-        //             .map(|n| n.as_str())
-        //             .unwrap_or("Relation");
-        //         let target_name = registry
-        //             .type_names
-        //             .get(&target.low32())
-        //             .map(|n| n.as_str())
-        //             .unwrap_or("Target");
-        //         &format!("({relation_name}, {target_name})")
-        //     } else if let Some(name) = registry.type_names.get(&component.low32()) {
-        //         name
-        //     } else {
-        //         "No name"
-        //     };
-        //     println!("    {},", type_name);
+    pub fn debug_info(&self, archetypes: &Archetypes) -> String {
+        let mut components = String::new();
+        let mut storages_len = String::new();
+        for id in self.components.iter() {
+            let debug_name = archetypes.debug_id_name(*id);
+            components.push_str(&format!("{}, ", debug_name));
+        }
+        for (storage_id, index) in &self.storage_indices {
+            let component_name = archetypes.debug_id_name(*storage_id);
+            let storage = &self.storages[*index];
+            let storage = storage.borrow();
+            storages_len.push_str(&format!("\n        {}: {},", component_name, storage.len()));
+        }
+        let components_len = components.len();
+        if !components.is_empty() {
+            components.delete_char_range((components_len - 2)..(components_len));
+        }
+        let components = match components.is_empty() {
+            true => "".to_string(),
+            false => format!("\n    components: {},", components),
+        };
+        let table_string = format!(
+            r"Table({}) {{
+    len: {},{}
+    storages_len: {{{}
+    }},
+}}",
+            self.id().0,
+            self.len(),
+            components,
+            storages_len,
+        );
+        table_string
+    }
+
+    pub fn debug_components_info(
+        &self,
+        archetypes: &Archetypes,
+        entites_range: Range<usize>,
+    ) -> String {
+        let min = entites_range.start.max(0);
+        let max = entites_range.end.min(self.len());
+        let mut entities_info = String::new();
+        for id in min..max {
+            let entity_id = self.entity_indices[id];
+            let record = archetypes
+                .record_by_index(entity_id)
+                .expect("entities inside archetypes should always be valid");
+            let registry = archetypes.type_registry();
+            //TODO: replace u32 ids with actual identifiers
+            let mut components_info = String::new();
+            for (storage_id, index) in &self.storage_indices {
+                let component_name = archetypes.debug_id_name(*storage_id);
+                let Some(functions) = &registry.functions.get(&storage_id.stripped()) else {
+                    continue;
+                };
+                let storage = &self.storages[*index];
+                let storage = storage.borrow();
+                let ptr = unsafe { storage.0.get_checked(record.table_row.0).as_ptr() };
+                let ptr = unsafe {
+                    Ptr::new(
+                        NonNull::new(ptr).expect("pointer to component data should NOT be null"),
+                    )
+                };
+                let debug_string = (functions.to_debug_string)(ptr);
+                components_info.push_str(&format!("\n    {},", debug_string));
+            }
+            let entity_name = archetypes.debug_id_name(record.entity);
+            let entity_info = format!(
+                r"{}: 
+{{{}
+}}, 
+",
+                entity_name, components_info
+            );
+            entities_info.push_str(&entity_info);
+        }
+        // if entities_info.is_empty() {
+        return entities_info;
         // }
-        // // println!("    hash: {},", self.components.table_hash(archetypes));
-        // println!("    len: {}\n}}", self.count);
+        //         format!(
+        //             r"{{
+        //     {entities_info},
+        // }}"
+        // )
+    }
+
+    pub fn storages(&self) -> &[Rc<RefCell<Storage>>] {
+        &self.storages
+    }
+
+    pub fn storage_indices(&self) -> &HashMap<Identifier, usize> {
+        &self.storage_indices
+    }
+
+    pub fn borrow_state(&self) -> BorrowState {
+        self.borrow_state
+    }
+
+    pub fn borrow_state_mut(&mut self) -> &mut BorrowState {
+        &mut self.borrow_state
+    }
+
+    pub fn component_ids(&self) -> &Identifiers {
+        &self.components
     }
 }
 
@@ -332,10 +420,11 @@ impl Table {
         mut old_archetype: RefMut<Archetype>,
     ) -> (ArchetypeRow, TableRow) {
         let (archetype_row, table_row) = {
-            let old_table = old_archetype.table();
-            let new_table = new_archetype.table().clone();
             let (arhetype_row, table_row) =
-                new_archetype.push_entity(entity.low32() as usize, ArchetypeAdd::ArchetypeAndTable);
+                new_archetype.push_entity(entity.low32(), ArchetypeAdd::ArchetypeAndTable);
+
+            let old_table = old_archetype.table();
+            let new_table = new_archetype.table();
             let old = old_table.borrow();
             let new = new_table.borrow();
             for (id, old_index) in old.storage_indices.iter() {
@@ -410,7 +499,7 @@ mod tests {
         let mut table = Table::new(&components, registry.clone());
         for i in 0..500 {
             let entity = Identifier::from(i);
-            table.push_entity(entity.low32() as usize);
+            table.push_entity(entity.low32());
             table.push_component::<Position>(component, Position { x: 1, y: 1 });
         }
         let storage = table.storage(component).unwrap().clone();
@@ -437,7 +526,7 @@ mod tests {
             .insert(component.stripped(), Layout::new::<Position>());
         let components = BTreeSet::from([component]);
         let mut table = Table::new(&components, registry.clone());
-        table.push_entity(entity.low32() as usize);
+        table.push_entity(entity.low32());
         table.push_component::<Position>(component, Position { x: 10, y: 20 });
         let storage = table.storage(component).unwrap().clone();
         let storage_ref = storage.borrow();

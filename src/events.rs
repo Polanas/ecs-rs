@@ -5,8 +5,9 @@ use bevy_utils::hashbrown::{HashMap, HashSet};
 
 use crate::{systems::SystemId, world::World};
 
-impl_component! {
-    pub(crate) struct CurrentSystemTypeId {
+Component! {
+    pub(crate) struct CurrentSystemId {
+        #[educe(Debug(ignore))]
         pub(crate) value: SystemId,
     }
 }
@@ -14,7 +15,7 @@ impl_component! {
 pub trait Event: 'static {}
 impl<T: 'static> Event for T {}
 
-impl CurrentSystemTypeId {
+impl CurrentSystemId {
     pub(crate) fn new(value: SystemId) -> Self {
         Self { value }
     }

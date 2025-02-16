@@ -29,7 +29,7 @@ pub trait RegisterComponentQuery {
     fn register();
 }
 
-impl<T: AbstractComponent> RegisterComponentQuery for T {
+impl<T: AbstractComponent + bevy_reflect::GetTypeRegistration> RegisterComponentQuery for T {
     fn register() {
         archetypes_mut(|a| {
             a.register_component::<T>();

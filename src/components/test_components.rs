@@ -1,6 +1,6 @@
 use macro_rules_attribute::apply;
-#[apply(impl_component!)]
-#[derive(Copy, Debug, Default)]
+#[apply(Component!)]
+#[derive(Copy, Default)]
 pub struct Position {
     #[serde(default)]
     pub x: i32,
@@ -13,8 +13,8 @@ impl Position {
         Self { x, y }
     }
 }
-#[apply(impl_component!)]
-#[derive(Copy, Debug, Default)]
+#[apply(Component!)]
+#[derive(Copy, Default)]
 pub struct Velocity {
     pub x: i32,
     pub y: i32,
@@ -26,23 +26,23 @@ impl Velocity {
     }
 }
 
-#[apply(impl_component!)]
+#[apply(Component!)]
 pub struct Name {
     pub value: String,
 }
-#[apply(impl_component!)]
+#[apply(Component!)]
 pub struct Owes {
     pub amount: i32,
 }
-#[apply(impl_component!)]
+#[apply(Component!)]
 pub struct IsCool {}
-#[apply(impl_component!)]
+#[apply(Component!)]
 pub struct Likes {}
-#[apply(impl_component!)]
+#[apply(Component!)]
 pub struct Begin {}
-#[apply(impl_component!)]
+#[apply(Component!)]
 pub struct End {}
-#[apply(impl_component!)]
+#[apply(Component!)]
 pub struct Apples {}
-#[apply(impl_component!)]
+#[apply(Component!)]
 pub struct Oranges {}

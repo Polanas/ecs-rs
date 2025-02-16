@@ -7,175 +7,450 @@ use std::{
 
 use bevy_reflect::Reflect;
 use bevy_utils::hashbrown::HashMap;
+use macro_rules_attribute::apply;
 use serde::{Deserialize, Serialize};
 
-use crate::{events::CurrentSystemTypeId, world::World};
+use crate::{events::CurrentSystemId, world::World};
 
 #[macro_export]
-macro_rules! impl_system {
-    ($t:ty, states) => {
-        impl $crate::systems::System for $t {
-            fn run(&mut self, world: &$crate::world::World, states: &$crate::systems::States) {
-                Self::run(self, world, states);
-            }
-        }
-    };
-    ($t:ty) => {
-        impl $crate::systems::System for $t {
-            fn run(&mut self, world: &$crate::world::World, _states: &$crate::systems::States) {
-                Self::run(self, world);
-            }
-        }
-    };
-}
-
-#[macro_export]
-macro_rules! impl_systems {
+macro_rules! System {
     (
-        $($t:ty),+
+        $( #[$meta:meta] )*
+    //  ^~~~attributes~~~~^
+        $vis:vis struct $name:ident (
+            $(
+                $( #[$field_meta:meta] )*
+    //          ^~~~field attributes~~~~^
+                $field_vis:vis $field_ty:ty
+    //          ^~~~~~a single field~~~~~~^
+            ),*
+        $(,)? );
     ) => {
-        $(
-            impl_system!($t);
-        )+
+        $( #[$meta] )*
+        $vis struct $name (
+            $(
+                $( #[$field_meta] )*
+                $field_vis $field_ty
+            ),*
+        );
+
+        impl $crate::systems::IntoSystems<$crate::world::World> for $name {
+            type System = Self;
+            fn into_systems(self) -> $crate::systems::SystemWithState<Self::System> {
+                $crate::systems::SystemWithState {
+                    system: self,
+                    should_run: None,
+                    states: bevy_utils::hashbrown::HashMap::new(),
+                }
+            }
+        }
+    };
+    {
+        $( #[$meta:meta] )*
+        $vis:vis struct $name:ident {
+            $(
+                $( #[$field_meta:meta] )*
+                $field_vis:vis $field_name:ident : $field_ty:ty
+            ),*
+        $(,)? }
+    } => {
+        $( #[$meta] )*
+        $vis struct $name {
+            $(
+                $( #[$field_meta] )*
+                $field_vis $field_name : $field_ty
+            ),*
+        }
+
+        impl $crate::systems::IntoSystems<$crate::world::World> for $name {
+            type System = Self;
+            fn into_systems(self) -> $crate::systems::SystemWithState<Self::System> {
+                $crate::systems::SystemWithState {
+                    system: self,
+                    should_run: None,
+                    states: bevy_utils::hashbrown::HashMap::new(),
+                }
+            }
+        }
+    }
+}
+
+pub trait System {
+    fn run(&mut self, world: &World, context: &egui::Context);
+    fn systems_vec(self) -> Vec<Box<dyn System>>
+    where
+        Self: Sized + 'static,
+    {
+        vec![Box::new(self)]
+    }
+}
+
+pub trait IntoSystem<Input> {
+    type System: System + 'static;
+
+    fn into_system(self) -> SystemWithState<Self::System>;
+    fn should_run(self, f: impl ShouldRunFn) -> SystemWithState<Self::System>
+    where
+        Self: Sized;
+    fn with_state<S: StateData>(self, data: S) -> SystemWithState<Self::System>;
+}
+
+impl<F: FnMut(&World) + 'static> System for MyFunctionSystem<World, F> {
+    fn run(&mut self, world: &World, _context: &egui::Context) {
+        (self.f)(world);
+    }
+
+    fn systems_vec(self) -> Vec<Box<dyn System>> {
+        vec![Box::new(self)]
+    }
+}
+
+impl<F: FnMut(&World) + 'static> IntoSystem<World> for F {
+    type System = MyFunctionSystem<World, Self>;
+
+    fn into_system(self) -> SystemWithState<Self::System> {
+        SystemWithState {
+            system: MyFunctionSystem {
+                f: self,
+                marker: Default::default(),
+            },
+            should_run: None,
+            states: HashMap::new(),
+        }
+    }
+
+    fn should_run(self, f: impl ShouldRunFn) -> SystemWithState<Self::System>
+    where
+        Self: Sized,
+    {
+        SystemWithState {
+            system: MyFunctionSystem {
+                f: self,
+                marker: Default::default(),
+            },
+            should_run: Some(Box::new(f)),
+            states: HashMap::new(),
+        }
+    }
+
+    fn with_state<S: StateData>(self, data: S) -> SystemWithState<Self::System> {
+        let mut states = HashMap::new();
+        data.add_state_id(&mut states);
+        SystemWithState {
+            system: MyFunctionSystem {
+                f: self,
+                marker: Default::default(),
+            },
+            should_run: None,
+            states,
+        }
+    }
+}
+
+impl<F: FnMut(&World, &egui::Context) + 'static> System
+    for MyFunctionSystem<(World, egui::Context), F>
+{
+    fn run(&mut self, world: &World, context: &egui::Context) {
+        (self.f)(world, context);
+    }
+
+    fn systems_vec(self) -> Vec<Box<dyn System>> {
+        vec![Box::new(self)]
+    }
+}
+
+impl<F: FnMut(&World, &egui::Context) + 'static> IntoSystem<(World, egui::Context)> for F {
+    type System = MyFunctionSystem<(World, egui::Context), Self>;
+
+    fn into_system(self) -> SystemWithState<Self::System> {
+        SystemWithState {
+            system: MyFunctionSystem {
+                f: self,
+                marker: Default::default(),
+            },
+            should_run: None,
+            states: HashMap::new(),
+        }
+    }
+
+    fn should_run(self, f: impl ShouldRunFn) -> SystemWithState<Self::System>
+    where
+        Self: Sized,
+    {
+        SystemWithState {
+            system: MyFunctionSystem {
+                f: self,
+                marker: Default::default(),
+            },
+            should_run: Some(Box::new(f)),
+            states: HashMap::new(),
+        }
+    }
+
+    fn with_state<S: StateData>(self, data: S) -> SystemWithState<Self::System> {
+        let mut states = HashMap::new();
+        data.add_state_id(&mut states);
+        SystemWithState {
+            system: MyFunctionSystem {
+                f: self,
+                marker: Default::default(),
+            },
+            should_run: None,
+            states,
+        }
+    }
+}
+pub trait ShouldRunFn: 'static {
+    fn should_run(&mut self, world: &World) -> bool;
+}
+impl<F: FnMut(&World) -> bool + 'static> ShouldRunFn for F {
+    fn should_run(&mut self, world: &World) -> bool {
+        (self)(world)
+    }
+}
+
+impl<F: FnMut(&World) + 'static> IntoSystem<World> for SystemWithState<MyFunctionSystem<World, F>> {
+    type System = MyFunctionSystem<World, F>;
+
+    fn into_system(self) -> SystemWithState<Self::System> {
+        SystemWithState {
+            system: self.system,
+            should_run: self.should_run,
+            states: HashMap::new(),
+        }
+    }
+
+    fn should_run(mut self, f: impl ShouldRunFn) -> SystemWithState<Self::System>
+    where
+        Self: Sized,
+    {
+        self.should_run = Some(Box::new(f));
+        self
+    }
+
+    fn with_state<S: StateData>(mut self, data: S) -> SystemWithState<Self::System> {
+        data.add_state_id(&mut self.states);
+        self
+    }
+}
+impl<F: FnMut(&World, &egui::Context) + 'static> IntoSystem<(World, egui::Context)>
+    for SystemWithState<MyFunctionSystem<(World, egui::Context), F>>
+{
+    type System = MyFunctionSystem<(World, egui::Context), F>;
+
+    fn into_system(self) -> SystemWithState<Self::System> {
+        SystemWithState {
+            system: self.system,
+            should_run: self.should_run,
+            states: HashMap::new(),
+        }
+    }
+
+    fn should_run(mut self, f: impl ShouldRunFn) -> SystemWithState<Self::System>
+    where
+        Self: Sized,
+    {
+        self.should_run = Some(Box::new(f));
+        self
+    }
+
+    fn with_state<S: StateData>(mut self, data: S) -> SystemWithState<Self::System> {
+        data.add_state_id(&mut self.states);
+        self
+    }
+}
+
+pub struct SystemWithState<S: System> {
+    pub system: S,
+    pub should_run: Option<Box<dyn ShouldRunFn>>,
+    pub states: HashMap<TypeId, EnumId>,
+}
+
+pub trait IntoSystems<Input> {
+    type System: System + 'static;
+    fn into_systems(self) -> SystemWithState<Self::System>;
+}
+
+#[macro_export]
+macro_rules! call_16_times {
+    ($target:ident) => {
+        $target!(T1);
+        $target!(T1, T2);
+        $target!(T1, T2, T3);
+        $target!(T1, T2, T3, T4);
+        $target!(T1, T2, T3, T4, T5);
+        $target!(T1, T2, T3, T4, T5, T6);
+        $target!(T1, T2, T3, T4, T5, T6, T7);
+        $target!(T1, T2, T3, T4, T5, T6, T7, T8);
+        $target!(T1, T2, T3, T4, T5, T6, T7, T8, T9);
+        $target!(T1, T2, T3, T4, T5, T6, T7, T8, T9, T10);
+        $target!(T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11);
+        $target!(T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12);
+        $target!(T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13);
+        $target!(T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14);
+        $target!(T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15);
+        $target!(T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16);
     };
 }
 
-macro_rules! impl_system_data {
-    (
-        $(($params:ident, $fields:tt)),+
-    ) =>
-    {
-        impl<$($params: SystemsData),+> SystemsData for ($($params),+,) {
-            fn add_systems(self, systems: &mut Vec<(Box<dyn System>, SystemId)>) {
+macro_rules! impl_sytem_tuple {
+    ($($param:ident),+) => {
+        impl <$($param: System + 'static),+> System for ($($param),+,) {
+            fn run(&mut self, world: &World, context: &egui::Context) {
+                #[allow(non_snake_case)]
+                let ($($param),+,) = self;
                 $(
-                    self.$fields.add_systems(systems);
+                    $param.run(world, context);
                 )+
             }
 
-            // fn run_if<R: FnMut(&World) -> bool + 'static>(self, should_run: R) -> impl AbstractSystemsWithStateData {
-            //     SystemsWithStateData {
-            //         state_data: (),
-            //         systems_data: self,
-            //         should_run: Some(Box::new(should_run)),
-            //     }
-            // }
+            fn systems_vec(self) -> Vec<Box<dyn System>> {
+                #[allow(non_snake_case)]
+                let ($($param),+,) = self;
+                let mut systems = vec![];
+                $(
+                    systems.append(&mut $param.systems_vec());
+                )+
+                systems
+            }
+        }
+    };
+}
+call_16_times!(impl_sytem_tuple);
 
-            fn with_state<S: StateData>(self, data: S) -> impl AbstractSystemsWithStateData
-            where
-                Self: Sized,
-            {
-                SystemsWithStateData {
-                    state_data: data,
-                    systems_data: self,
+impl<F: FnMut(&World) + 'static> IntoSystems<World>
+    for SystemWithState<MyFunctionSystem<World, F>>
+{
+    type System = MyFunctionSystem<World, F>;
+
+    fn into_systems(self) -> SystemWithState<Self::System> {
+        self
+    }
+}
+
+impl<F: FnMut(&World, &egui::Context) + 'static> IntoSystems<(World, egui::Context)>
+    for SystemWithState<MyFunctionSystem<(World, egui::Context), F>>
+{
+    type System = MyFunctionSystem<(World, egui::Context), F>;
+
+    fn into_systems(self) -> SystemWithState<Self::System> {
+        self
+    }
+}
+impl<F: FnMut(&World) + 'static> IntoSystems<World> for F {
+    type System = MyFunctionSystem<World, Self>;
+
+    fn into_systems(self) -> SystemWithState<Self::System> {
+        SystemWithState {
+            system: MyFunctionSystem {
+                f: self,
+                marker: Default::default(),
+            },
+            should_run: None,
+            states: HashMap::new(),
+        }
+    }
+}
+impl<F: FnMut(&World, &egui::Context) + 'static> IntoSystems<(World, egui::Context)> for F {
+    type System = MyFunctionSystem<(World, egui::Context), Self>;
+
+    fn into_systems(self) -> SystemWithState<Self::System> {
+        SystemWithState {
+            system: MyFunctionSystem {
+                f: self,
+                marker: Default::default(),
+            },
+            should_run: None,
+            states: HashMap::new(),
+        }
+    }
+}
+macro_rules! impl_tuple_helper_input {
+    (begin, $macro:ident, ($last_input:ident, $last_param:ident) $(,)?) => {};
+    (begin, $macro:ident, ($input:ident,$param:ident), $(($rest_input:ident,$rest_param:ident)),+ $(,)?) => {
+        $macro!($(($rest_input, $rest_param)),+);
+    };
+    ($macro:ident, ($input:ident,$param:ident), $(($rest_input:ident,$rest_param:ident)),+ $(,)?) => {
+        $macro!(($input,$param), $(($rest_input, $rest_param)),+);
+    };
+}
+macro_rules! impl_into_systems_tuples {
+    ($(($input:ident, $param:ident)),+ $(,)?) => {
+        impl_tuple_helper_input!(
+            begin,
+            impl_into_systems_tuples,
+            $(($input,$param)),+
+        );
+        impl <$($input, $param: IntoSystems<$input>),+> IntoSystems<($($input),+,)> for ($($param),+,)
+        {
+            type System = ($($param::System),+,);
+
+            fn into_systems(self) -> SystemWithState<Self::System> {
+                #[allow(non_snake_case)]
+                let ($($param),+,) = self;
+                SystemWithState {
+                    system:
+                        ($($param.into_systems().system),+,),
                     should_run: None,
+                    states: HashMap::new(),
                 }
             }
         }
     };
 }
-impl_system_data!((T1, 0));
-impl_system_data!((T1, 0), (T2, 1));
-impl_system_data!((T1, 0), (T2, 1), (T3, 2));
-impl_system_data!((T1, 0), (T2, 1), (T3, 2), (T4, 3));
-impl_system_data!((T1, 0), (T2, 1), (T3, 2), (T4, 3), (T5, 4));
-impl_system_data!((T1, 0), (T2, 1), (T3, 2), (T4, 3), (T5, 4), (T6, 5));
-impl_system_data!(
-    (T1, 0),
-    (T2, 1),
-    (T3, 2),
-    (T4, 3),
-    (T5, 4),
-    (T6, 5),
-    (T7, 6)
-);
-impl_system_data!(
-    (T1, 0),
-    (T2, 1),
-    (T3, 2),
-    (T4, 3),
-    (T5, 4),
-    (T6, 5),
-    (T7, 6),
-    (T8, 7)
-);
-impl_system_data!(
-    (T1, 0),
-    (T2, 1),
-    (T3, 2),
-    (T4, 3),
-    (T5, 4),
-    (T6, 5),
-    (T7, 6),
-    (T8, 7),
-    (T9, 8)
-);
-impl_system_data!(
-    (T1, 0),
-    (T2, 1),
-    (T3, 2),
-    (T4, 3),
-    (T5, 4),
-    (T6, 5),
-    (T7, 6),
-    (T8, 7),
-    (T9, 8),
-    (T10, 9)
-);
-impl_system_data!(
-    (T1, 0),
-    (T2, 1),
-    (T3, 2),
-    (T4, 3),
-    (T5, 4),
-    (T6, 5),
-    (T7, 6),
-    (T8, 7),
-    (T9, 8),
-    (T10, 9),
-    (T11, 10)
-);
-impl_system_data!(
-    (T1, 0),
-    (T2, 1),
-    (T3, 2),
-    (T4, 3),
-    (T5, 4),
-    (T6, 5),
-    (T7, 6),
-    (T8, 7),
-    (T9, 8),
-    (T10, 9),
-    (T11, 10),
-    (T12, 11)
+
+impl_tuple_helper_input!(
+    impl_into_systems_tuples,
+    (I1, T1),
+    (I2, T2),
+    (I3, T3),
+    (I4, T4),
+    (I5, T5),
+    (I6, T6),
+    (I7, T7),
+    (I8, T8),
+    (I9, T9),
+    (I10, T10),
+    (I11, T11),
+    (I12, T12),
+    (I13, T13),
+    (I14, T14),
+    (I15, T15),
+    (I16, T16),
 );
 
-impl<T: System + 'static> AbstractSystemsWithStateData for T {
-    fn add_state_ids(&self, _state_ids: &mut HashMap<TypeId, EnumId>) {}
-
-    fn into_system_data(self, systems: &mut Systems, stage: SystemStage) -> SystemData {
-        let ids = systems.system_data_ids(&HashMap::new());
-        SystemData {
-            stage,
-            state_ids: ids,
-            should_run: None,
-            systems: vec![(Box::new(self), next_system_id())],
-        }
+fn test() {
+    #[derive(Debug, Hash)]
+    enum State {
+        S1,
+        S2,
     }
-
-    fn run_if<R: FnMut(&World) -> bool + 'static>(
-        self,
-        should_run: R,
-    ) -> impl AbstractSystemsWithStateData {
-        SystemsWithStateData {
-            state_data: (),
-            systems_data: self,
-            should_run: Some(Box::new(should_run)),
-        }
+    impl_system_state!(State);
+    fn add_systems<I, S: System>(into: impl IntoSystems<I, System = S>) {
+        let systems = into.into_systems();
     }
-
-    fn add_systems(self, systems: &mut Vec<(Box<dyn System>, SystemId)>) {
-        systems.push((Box::new(self), next_system_id()));
-    }
+    fn system1(world: &World, e: &egui::Context) {}
+    fn system2(world: &World) {}
+    add_systems((|w: &World| {},));
+    // add_systems::<
+    //     ((World, egui::Context), World),
+    //     (
+    //         MyFunctionSystem<(World, egui::Context), _>,
+    //         MyFunctionSystem<World, _>,
+    //     ),
+    // >((
+    //     system1.my_run_if(|w: &World| true).my_with_state(State::S1),
+    //     system2.my_run_if(|w: &World| true).my_with_state(State::S2),
+    // ));
+    add_systems((
+        system1.should_run(|w: &World| true).with_state(State::S1),
+        system2.should_run(|w: &World| true).with_state(State::S2),
+    ));
+}
+pub struct MyFunctionSystem<Input, F> {
+    f: F,
+    //that's strange but ok
+    marker: PhantomData<fn() -> Input>,
 }
 
 macro_rules! impl_state_data {
@@ -268,120 +543,6 @@ impl_state_data!(
     (T12, 11)
 );
 
-macro_rules! impl_systems_with_state {
-    (
-        $(($params:ident, $field:tt)),+
-    ) =>
-    {
-        impl<$($params: SystemsData),+> AbstractSystemsWithStateData for ($($params),+,) {
-            fn add_state_ids(&self, _: &mut HashMap<TypeId, EnumId>) {}
-
-            fn add_systems(self, systems: &mut Vec<(Box<dyn System>, SystemId)>) {
-                $(
-                    self.$field.add_systems(systems);
-                )+
-            }
-
-            fn into_system_data(self, systems: &mut Systems, stage: SystemStage) -> SystemData {
-                let mut system_fns = vec![];
-                let ids = systems.system_data_ids(&HashMap::new());
-                AbstractSystemsWithStateData::add_systems(self, &mut system_fns);
-                SystemData {
-                    stage,
-                    should_run: None,
-                    systems: system_fns,
-                    state_ids: ids,
-
-                }
-            }
-
-            fn run_if<R: FnMut(&World) -> bool + 'static>(self, should_run: R) -> impl AbstractSystemsWithStateData {
-                SystemsWithStateData {
-                    state_data: (),
-                    systems_data: self,
-                    should_run: Some(Box::new(should_run)),
-                }
-            }
-        }
-    };
-}
-
-impl_systems_with_state!((T1, 0));
-impl_systems_with_state!((T1, 0), (T2, 1));
-impl_systems_with_state!((T1, 0), (T2, 1), (T3, 2));
-impl_systems_with_state!((T1, 0), (T2, 1), (T3, 2), (T4, 3));
-impl_systems_with_state!((T1, 0), (T2, 1), (T3, 2), (T4, 3), (T5, 4));
-impl_systems_with_state!((T1, 0), (T2, 1), (T3, 2), (T4, 3), (T5, 4), (T6, 5));
-impl_systems_with_state!(
-    (T1, 0),
-    (T2, 1),
-    (T3, 2),
-    (T4, 3),
-    (T5, 4),
-    (T6, 5),
-    (T7, 6)
-);
-impl_systems_with_state!(
-    (T1, 0),
-    (T2, 1),
-    (T3, 2),
-    (T4, 3),
-    (T5, 4),
-    (T6, 5),
-    (T7, 6),
-    (T8, 7)
-);
-impl_systems_with_state!(
-    (T1, 0),
-    (T2, 1),
-    (T3, 2),
-    (T4, 3),
-    (T5, 4),
-    (T6, 5),
-    (T7, 6),
-    (T8, 7),
-    (T9, 8)
-);
-impl_systems_with_state!(
-    (T1, 0),
-    (T2, 1),
-    (T3, 2),
-    (T4, 3),
-    (T5, 4),
-    (T6, 5),
-    (T7, 6),
-    (T8, 7),
-    (T9, 8),
-    (T10, 9)
-);
-impl_systems_with_state!(
-    (T1, 0),
-    (T2, 1),
-    (T3, 2),
-    (T4, 3),
-    (T5, 4),
-    (T6, 5),
-    (T7, 6),
-    (T8, 7),
-    (T9, 8),
-    (T10, 9),
-    (T11, 10)
-);
-impl_systems_with_state!(
-    (T1, 0),
-    (T2, 1),
-    (T3, 2),
-    (T4, 3),
-    (T5, 4),
-    (T6, 5),
-    (T7, 6),
-    (T8, 7),
-    (T9, 8),
-    (T10, 9),
-    (T11, 10),
-    (T12, 11)
-);
-
 impl StateData for () {
     fn add_state_id(&self, _: &mut HashMap<TypeId, EnumId>) {}
 }
@@ -392,123 +553,8 @@ impl<T: SystemState> StateData for T {
     }
 }
 
-impl<F: SystemsData, S: StateData> AbstractSystemsWithStateData for SystemsWithStateData<F, S> {
-    fn add_state_ids(&self, state_ids: &mut HashMap<TypeId, EnumId>) {
-        self.state_data.add_state_id(state_ids);
-    }
-
-    fn into_system_data(self, systems: &mut Systems, stage: SystemStage) -> SystemData {
-        let mut ids = HashMap::new();
-        self.state_data.add_state_id(&mut ids);
-        let ids = systems.system_data_ids(&ids);
-
-        let mut systems = vec![];
-        self.systems_data.add_systems(&mut systems);
-        SystemData {
-            stage,
-            state_ids: ids,
-            should_run: self.should_run,
-            systems,
-        }
-    }
-
-    fn run_if<R: FnMut(&World) -> bool + 'static>(
-        self,
-        should_run: R,
-    ) -> impl AbstractSystemsWithStateData {
-        SystemsWithStateData {
-            state_data: self.state_data,
-            systems_data: self.systems_data,
-            should_run: Some(Box::new(should_run)),
-        }
-    }
-
-    fn add_systems(self, systems: &mut Vec<(Box<dyn System>, SystemId)>) {
-        self.systems_data.add_systems(systems);
-    }
-}
-
-pub struct SystemsWithStateData<F: SystemsData, S: StateData> {
-    state_data: S,
-    systems_data: F,
-    should_run: Option<Box<dyn ShouldRun>>,
-}
-
-pub trait System {
-    fn run(&mut self, world: &World, states: &States);
-}
-pub trait ShouldRun {
-    fn should_run(&mut self, world: &World) -> bool;
-}
-impl<T: FnMut(&World) -> bool> ShouldRun for T {
-    fn should_run(&mut self, world: &World) -> bool {
-        self(world)
-    }
-}
-
-impl<T: FnMut(&World)> System for T {
-    fn run(&mut self, world: &World, _states: &States) {
-        self(world);
-    }
-}
-
-// impl<T: FnMut(&World, &States)> System for T {
-//     fn run(&mut self, world: &World, _states: &States) {
-//         self(world, _states);
-//     }
-// }
-
 pub trait StateData {
     fn add_state_id(&self, state_ids: &mut HashMap<TypeId, EnumId>);
-}
-
-pub trait SystemsData {
-    fn with_state<S: StateData>(self, data: S) -> impl AbstractSystemsWithStateData
-    where
-        Self: Sized;
-    fn add_systems(self, systems: &mut Vec<(Box<dyn System>, SystemId)>);
-    // fn run_if<R: FnMut(&World) -> bool + 'static>(
-    //     self,
-    //     should_run: R,
-    // ) -> impl AbstractSystemsWithStateData;
-}
-
-impl<T: System + 'static> SystemsData for T {
-    fn with_state<S: StateData>(self, data: S) -> impl AbstractSystemsWithStateData
-    where
-        Self: Sized,
-    {
-        SystemsWithStateData {
-            state_data: data,
-            systems_data: self,
-            should_run: None,
-        }
-    }
-
-    fn add_systems(self, systems: &mut Vec<(Box<dyn System>, SystemId)>) {
-        systems.push((Box::new(self), next_system_id()));
-    }
-
-    // fn run_if<R: FnMut(&World) -> bool + 'static>(
-    //     self,
-    //     should_run: R,
-    // ) -> impl AbstractSystemsWithStateData {
-    //     SystemsWithStateData {
-    //         state_data: (),
-    //         systems_data: self,
-    //         should_run: Some(Box::new(should_run)),
-    //     }
-    // }
-}
-
-pub trait AbstractSystemsWithStateData {
-    fn add_state_ids(&self, state_ids: &mut HashMap<TypeId, EnumId>);
-    fn add_systems(self, systems: &mut Vec<(Box<dyn System>, SystemId)>);
-    fn into_system_data(self, systems: &mut Systems, stage: SystemStage) -> SystemData;
-    fn run_if<R: FnMut(&World) -> bool + 'static>(
-        self,
-        should_run: R,
-    ) -> impl AbstractSystemsWithStateData;
 }
 
 pub trait SystemState: 'static {
@@ -519,8 +565,10 @@ pub type EnumId = u64;
 
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
 pub enum SystemStage {
+    PreInit,
     Init,
-    Begin,
+    PostInit,
+    First,
     PreUpdate,
     Update,
     PostUpdate,
@@ -530,12 +578,14 @@ pub enum SystemStage {
 impl SystemStage {
     pub fn id(&self) -> EnumId {
         match self {
-            SystemStage::Init => 0,
-            SystemStage::Begin => 1,
-            SystemStage::PreUpdate => 2,
-            SystemStage::Update => 3,
-            SystemStage::PostUpdate => 4,
-            SystemStage::Last => 5,
+            SystemStage::PreInit => 0,
+            SystemStage::Init => 1,
+            SystemStage::PostInit => 2,
+            SystemStage::First => 3,
+            SystemStage::PreUpdate => 4,
+            SystemStage::Update => 5,
+            SystemStage::PostUpdate => 6,
+            SystemStage::Last => 7,
         }
     }
 }
@@ -543,7 +593,7 @@ impl SystemStage {
 pub struct SystemData {
     pub stage: SystemStage,
     pub state_ids: HashMap<TypeId, Option<EnumId>>,
-    pub should_run: Option<Box<dyn ShouldRun>>,
+    pub should_run: Option<Box<dyn ShouldRunFn>>,
     pub systems: Vec<(Box<dyn System>, SystemId)>,
 }
 type StatesMap = HashMap<TypeId, (EnumId, Rc<RefCell<dyn Any>>)>;
@@ -606,6 +656,7 @@ pub struct States {
 // }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Reflect, Serialize, Deserialize)]
+#[apply(FromIntoLua)]
 pub struct SystemId(pub u64);
 
 thread_local! {
@@ -681,28 +732,54 @@ impl Systems {
         ids
     }
 
-    pub fn add_systems<S: AbstractSystemsWithStateData + 'static>(
+    pub fn add_systems<S: System + 'static>(
         &mut self,
-        systems: S,
+        systems: SystemWithState<S>,
         stage: SystemStage,
     ) {
-        let data = systems.into_system_data(self, stage);
+        let data = SystemData {
+            stage,
+            state_ids: self.system_data_ids(&systems.states),
+            should_run: systems.should_run,
+            systems: systems
+                .system
+                .systems_vec()
+                .into_iter()
+                .map(|s| (s, next_system_id()))
+                .collect(),
+        };
         self.systems.push(data);
         self.systems.sort_by_key(|s| s.stage.id());
     }
 
-    pub fn run(&mut self, world: &World) {
-        let states = States {
-            states: self.states.clone(),
-        };
+    pub fn init(&mut self, world: &World, context: &egui::Context) {
         self.systems.retain_mut(|s| {
-            if s.stage == SystemStage::Init {
+            if matches!(
+                s.stage,
+                SystemStage::PreInit | SystemStage::Init | SystemStage::PostInit
+            ) {
                 s.systems
                     .iter_mut()
-                    .for_each(|(s, _)| s.run(world, &states));
+                    .for_each(|(s, _)| s.run(world, context));
                 return false;
             }
             true
+        });
+    }
+
+    pub fn run(&mut self, world: &World, context: &egui::Context) {
+        self.systems.retain_mut(|s| {
+            if matches!(
+                s.stage,
+                SystemStage::PreInit | SystemStage::Init | SystemStage::PostInit
+            ) {
+                s.systems
+                    .iter_mut()
+                    .for_each(|(s, _)| s.run(world, context));
+                false
+            } else {
+                true
+            }
         });
         for system_data in self.systems.iter_mut() {
             if system_data.state_ids.iter().all(|(k, v)| {
@@ -716,12 +793,12 @@ impl Systems {
             {
                 for (system, id) in system_data.systems.iter_mut() {
                     world.get_or_add_resource_mut(
-                        || CurrentSystemTypeId::new(*id),
+                        || CurrentSystemId::new(*id),
                         |current_id| {
                             current_id.value = *id;
                         },
                     );
-                    system.run(world, &states);
+                    system.run(world, context);
                 }
             }
         }

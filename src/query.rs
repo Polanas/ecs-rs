@@ -9,12 +9,12 @@ use std::{
 
 use packed_struct::PackedStruct;
 
-use crate::{archetypes::ChildOf, entity::Entity};
 use crate::identifier::IdentifierUnpacked;
 use crate::world::archetypes;
 pub use crate::{
     archetype::ArchetypeRow, components::component::EnumTag, relationship::RelationshipsIter,
 };
+use crate::{archetypes::ChildOf, entity::Entity, expect_fn::ExpectFnOption};
 use crate::{
     archetypes::QueryStorage,
     borrow_traits::BorrowFn,
@@ -40,7 +40,7 @@ pub struct IdsIterator<'ids> {
     index: usize,
 }
 
-impl<'ids> Iterator for IdsIterator<'ids> {
+impl Iterator for IdsIterator<'_> {
     type Item = Identifier;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -254,6 +254,32 @@ impl<T: AbstractComponent> QueryData for &mut T {
     }
 }
 
+impl QueryData for &mut Entity {
+    fn ids(_: &mut RequiredIds) {}
+}
+
+impl WorldQuery for &mut Entity {
+    type Item<'i> = Entity;
+
+    fn fetch<'w>(
+        storage: &'w Rc<RefCell<QueryStorage>>,
+        archetype_index: usize,
+        _: &mut IdsIterator,
+        _: TableRow,
+        archetype_row: ArchetypeRow,
+    ) -> Self::Item<'w> {
+        let storage = storage.borrow();
+        let archetype = &storage.archetypes[archetype_index].borrow();
+        archetypes(|archetypes| {
+            Entity::new(
+                archetypes
+                    .record_by_index(archetype.entity_indices()[archetype_row.0])
+                    .unwrap()
+                    .entity,
+            )
+        })
+    }
+}
 impl QueryData for &Entity {
     fn ids(_: &mut RequiredIds) {}
 }
@@ -271,7 +297,7 @@ impl WorldQuery for &Entity {
         let storage = storage.borrow();
         let archetype = &storage.archetypes[archetype_index].borrow();
         archetypes(|archetypes| {
-            Entity(
+            Entity::new(
                 archetypes
                     .record_by_index(archetype.entity_indices()[archetype_row.0])
                     .unwrap()
@@ -431,7 +457,7 @@ pub struct Ref<'a, T> {
     value: &'a T,
 }
 
-impl<'a, T> Debug for Ref<'a, T>
+impl<T> Debug for Ref<'_, T>
 where
     T: Debug,
 {
@@ -440,7 +466,12 @@ where
     }
 }
 
-impl<'a, T> Ref<'a, T>
+trait NewTrait<'a, T> where
+    T: Clone, {
+    fn clone(&self) -> T;
+}
+
+impl<'a, T> NewTrait<'a, T> for Ref<'a, T>
 where
     T: Clone,
 {
@@ -454,7 +485,7 @@ impl<'a, T> Ref<'a, T> {
     }
 }
 
-impl<'a, T> Deref for Ref<'a, T> {
+impl<T> Deref for Ref<'_, T> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
@@ -466,7 +497,7 @@ pub struct Mut<'a, T> {
     value: &'a mut T,
 }
 
-impl<'a, T> Mut<'a, T>
+impl<T> Mut<'_, T>
 where
     T: Clone,
 {
@@ -475,7 +506,7 @@ where
     }
 }
 
-impl<'a, T> Debug for Mut<'a, T>
+impl<T> Debug for Mut<'_, T>
 where
     T: Debug,
 {
@@ -498,12 +529,12 @@ impl<'a, T> Mut<'a, T> {
     }
 }
 
-impl<'a, T> DerefMut for Mut<'a, T> {
+impl<T> DerefMut for Mut<'_, T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         self.value
     }
 }
-impl<'a, T> Deref for Mut<'a, T> {
+impl<T> Deref for Mut<'_, T> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
@@ -518,7 +549,7 @@ pub struct QueryIterator<'w, D: QueryData, F: QueryFilterData> {
     entity_index: usize,
 }
 
-impl<'w, D: QueryData, F: QueryFilterData> Drop for QueryIterator<'w, D, F> {
+impl<D: QueryData, F: QueryFilterData> Drop for QueryIterator<'_, D, F> {
     fn drop(&mut self) {
         archetypes_mut(|a| a.unlock());
     }
@@ -937,7 +968,7 @@ impl<'w, D: QueryData, F: QueryFilterData> Iterator for QueryIterator<'w, D, F> 
         let record = loop {
             let archetype = archetypes.get(self.archetype_index)?;
 
-            if archetype.len() == 0 {
+            if archetype.is_empty() {
                 self.archetype_index += 1;
                 continue;
             }
@@ -951,8 +982,24 @@ impl<'w, D: QueryData, F: QueryFilterData> Iterator for QueryIterator<'w, D, F> 
             let record = world::archetypes(|archetypes| {
                 archetypes
                     .record_by_index(archetype.borrow_fn(|a| a.entity_indices()[self.entity_index]))
-                    .unwrap()
+                    .map(|r| r)
             });
+            let Some(record) = record else {
+                panic!(
+                    "could not find record of entity with id {:?}",
+                    archetype.borrow_fn(|a| a.entity_indices()[self.entity_index])
+                );
+                // self.entity_index += 1;
+                // continue;
+            };
+            // std::cell::Ref::map(record, |r| r.)
+            // let core:cell::Ref { value: Some(record) } = record else {
+            //     continue;
+            // };
+            // .expect_fn(|| {
+            //     log::error!("couldn't get a record while iterating entities")
+            // })
+            // });
 
             if !record.entity.is_active() {
                 self.entity_index += 1;

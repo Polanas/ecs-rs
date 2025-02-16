@@ -5,7 +5,7 @@ use crate::{archetypes::TableReusage, entity::Entity, world::archetypes_mut};
 use super::component::AbstractComponent;
 
 #[macro_export]
-macro_rules! component_bundle {
+macro_rules! ComponentBundle {
     (
         $( #[$meta:meta] )*
     //  ^~~~attributes~~~~^

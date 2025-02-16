@@ -10,9 +10,10 @@ use std::{
 
 use anyhow::{bail, Result};
 use bevy_ptr::{Ptr, PtrMut};
-use bevy_reflect::Reflect;
+use bevy_reflect::{Reflect, TypeRegistry};
 use bevy_utils::{hashbrown::HashMap, HashSet};
 use bimap::BiHashMap;
+use macro_rules_attribute::apply;
 use packed_struct::PackedStruct;
 use smol_str::{format_smolstr, SmolStr, ToSmolStr};
 use thiserror::Error;
@@ -24,18 +25,18 @@ use crate::{
         component::{AbstractComponent, EnumTag},
         component_hash::ComponentsHash,
         temp_components::TempComponentsStorage,
-        test_components::{Apples, Owes},
     },
     entity::{Entity, WILDCARD},
     entity_parser::{self, EntityParser, IdOrName, ParseError, ParsedEntityItem, TagType},
     expect_fn::ExpectFnOption,
     filter_mask::FilterMask,
     identifier::{Identifier, IdentifierHigh32, IdentifierUnpacked, WildcardKind},
+    lua_api::LuaApi,
     on_change_callbacks::{OnAddCallback, OnChangeCallbacks, OnRemoveCallback},
     query::RequiredIds,
     relationship::FindRelationshipsIter,
     systems::{EnumId, Systems},
-    table::{Storage, Table, TableRow},
+    table::{Storage, Table, TableId, TableRow},
     world::{archetypes, archetypes_mut},
     wrappers::{ArchetypeCell, TableCell},
 };
@@ -123,11 +124,14 @@ impl StrippedIdentifier {
         self.0.low32()
     }
 }
-pub type CloneFn = fn(Ptr<'_>, RefMut<Storage>);
+pub type CloneFn = fn(usize, Option<RefMut<Storage>>, RefMut<Storage>);
 pub type SerializeFn = fn(Ptr<'_>) -> serde_json::Result<serde_json::Value>;
 pub type DeserializeFn = fn(serde_json::Value, RefMut<Storage>) -> serde_json::Result<()>;
-pub type AsReflectRefFn = fn(Ptr<'_>, f: &dyn Fn(Option<&dyn Reflect>));
-pub type AsReflectMutFn = fn(PtrMut<'_>, f: &dyn Fn(Option<&mut dyn Reflect>));
+pub type AsReflectRefFn = fn(Ptr<'_>) -> Option<&'_ dyn Reflect>;
+pub type AsReflectMutFn = fn(PtrMut<'_>) -> Option<&'_ mut dyn Reflect>;
+pub type ToDebugString = fn(Ptr<'_>) -> String;
+pub type IntoLua = for<'a> fn(Ptr<'_>, &'a mlua::Lua) -> mlua::Result<mlua::Value<'a>>;
+pub type FromLua = for<'a> fn(mlua::Value<'a>, RefMut<Storage>, &'a mlua::Lua) -> mlua::Result<()>;
 
 #[derive(Clone)]
 pub struct Functions {
@@ -136,6 +140,9 @@ pub struct Functions {
     pub deserialize: DeserializeFn,
     pub as_reflect_ref: AsReflectRefFn,
     pub as_reflect_mut: AsReflectMutFn,
+    pub to_debug_string: ToDebugString,
+    pub into_lua: IntoLua,
+    pub from_lua: FromLua,
 }
 
 pub struct MyTypeRegistry {
@@ -145,39 +152,36 @@ pub struct MyTypeRegistry {
     pub identifiers: HashMap<TypeId, Identifier>,
     pub identifiers_by_names: HashMap<SmolStr, Identifier>,
     pub tags: HashSet<StrippedIdentifier>,
+    pub bevy_registry: TypeRegistry,
 }
 
 pub enum ComponentAddState {
     New,
-    AlreadyExisted,
+    AlreadyExists,
 }
 
-impl_component! {
-    #[derive(Debug)]
-    pub struct Component {
-        pub size: Option<usize>,
-        pub is_type: bool,
-    }
+#[apply(Component)]
+pub struct Component {
+    pub size: Option<usize>,
+    pub is_type: bool,
 }
-impl_component! {
-    pub struct Wildcard {}
-}
-impl_component! {
-    #[derive(Copy)]
-    pub struct EnumTagId(pub EnumId);
-}
-impl_component! {
-    pub struct Prefab {}
-}
-impl_component! {
-    pub struct InstanceOf {}
-}
-impl_component! {
-    pub struct ChildOf {}
-}
-impl_component! {
-    pub struct DynamicTag {}
-}
+
+#[apply(Component)]
+pub struct Wildcard;
+
+#[apply(Component)]
+#[derive(Copy)]
+pub struct EnumTagId(pub EnumId);
+
+#[apply(Component)]
+pub struct Prefab;
+#[apply(Component)]
+pub struct InstanceOf;
+#[apply(Component)]
+pub struct ChildOf;
+
+#[apply(Component)]
+pub struct DynamicTag;
 
 #[derive(Debug)]
 pub enum EntityKind {
@@ -359,6 +363,7 @@ impl MyTypeRegistry {
             layouts: HashMap::new(),
             functions: HashMap::new(),
             identifiers_by_names: HashMap::new(),
+            bevy_registry: TypeRegistry::new(),
         }
     }
 
@@ -389,14 +394,14 @@ pub struct QueryStorage {
 #[derive(Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct NameRight {
     pub name: SmolStr,
-    pub parent_id: usize,
+    pub parent_id: u32,
 }
 
 impl NameRight {
     pub fn global(name: SmolStr) -> Self {
         Self {
             name,
-            parent_id: WILDCARD.0.low32() as usize,
+            parent_id: WILDCARD.0.low32(),
         }
     }
 }
@@ -405,31 +410,31 @@ impl From<(String, Identifier)> for NameRight {
     fn from(value: (String, Identifier)) -> Self {
         Self {
             name: value.0.to_smolstr(),
-            parent_id: value.1.low32() as usize,
+            parent_id: value.1.low32(),
         }
     }
 }
 
 impl NameRight {
-    pub fn new(name: SmolStr, parent_id: usize) -> Self {
+    pub fn new(name: SmolStr, parent_id: u32) -> Self {
         Self { name, parent_id }
     }
-    pub fn to_entity_and_parent(&self, entity: usize) -> NameLeft {
+    pub fn to_entity_and_parent(&self, entity: u32) -> NameLeft {
         NameLeft::new(entity, self.parent_id)
     }
 }
 
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct NameLeft {
-    pub entity_index: usize,
-    pub parent_index: usize,
+    pub entity_index: u32,
+    pub parent_index: u32,
 }
 
 impl From<(Identifier, Identifier)> for NameLeft {
     fn from(value: (Identifier, Identifier)) -> Self {
         Self {
-            entity_index: value.0.low32() as usize,
-            parent_index: value.1.low32() as usize,
+            entity_index: value.0.low32(),
+            parent_index: value.1.low32(),
         }
     }
 }
@@ -437,17 +442,17 @@ impl From<(Identifier, Identifier)> for NameLeft {
 impl NameLeft {
     pub fn global(entity_id: Identifier) -> Self {
         Self {
-            entity_index: entity_id.low32() as usize,
-            parent_index: WILDCARD.0.low32() as usize,
+            entity_index: entity_id.low32(),
+            parent_index: WILDCARD.0.low32(),
         }
     }
     pub fn from_ids(entity_id: Identifier, parent_id: Identifier) -> Self {
         Self {
-            entity_index: entity_id.low32() as usize,
-            parent_index: parent_id.low32() as usize,
+            entity_index: entity_id.low32(),
+            parent_index: parent_id.low32(),
         }
     }
-    pub fn new(entity_index: usize, parent_index: usize) -> Self {
+    pub fn new(entity_index: u32, parent_index: u32) -> Self {
         Self {
             entity_index,
             parent_index,
@@ -460,17 +465,17 @@ impl NameLeft {
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct UniqueName {
-    parent_index: usize,
+    parent_index: u32,
     name: SmolStr,
 }
 
 impl UniqueName {
-    pub fn new(parent_index: usize, name: SmolStr) -> Self {
+    pub fn new(parent_index: u32, name: SmolStr) -> Self {
         Self { parent_index, name }
     }
     pub fn from_ids(parent: Identifier, name: SmolStr) -> Self {
         Self {
-            parent_index: parent.low32() as usize,
+            parent_index: parent.low32(),
             name,
         }
     }
@@ -484,10 +489,10 @@ pub struct StateOperation {
 
 pub type Resources = HashMap<TypeId, Rc<RefCell<dyn Any>>>;
 type Operations = Vec<ArchetypeOperation>;
-type Storages = HashMap<u64, Rc<RefCell<QueryStorage>>>;
+type QueryStorages = HashMap<u64, Rc<RefCell<QueryStorage>>>;
 
 pub struct Archetypes {
-    query_storages: Storages,
+    query_storages: QueryStorages,
     records: Records,
     type_registry: Rc<RefCell<MyTypeRegistry>>,
     archetypes: Vec<ArchetypeCell>,
@@ -510,10 +515,12 @@ pub struct Archetypes {
     callbacks: Rc<RefCell<OnChangeCallbacks>>,
     state_operations: Rc<RefCell<Vec<StateOperation>>>,
     entity_parser: EntityParser,
+    lua_api: Rc<RefCell<LuaApi>>,
 }
 
 impl Archetypes {
     pub fn new() -> Self {
+        let lua_api = LuaApi::new().expect("failed to create lua api");
         let mut archetypes = Self {
             records: RefCell::new(vec![None; ENTITIES_START_CAPACITY]).into(),
             archetypes: vec![],
@@ -538,6 +545,7 @@ impl Archetypes {
             callbacks: RefCell::new(OnChangeCallbacks::new()).into(),
             state_operations: RefCell::new(vec![]).into(),
             entity_parser: EntityParser::new(),
+            lua_api: RefCell::new(lua_api).into(),
         };
         {
             let mut registry = archetypes.type_registry.borrow_mut();
@@ -549,6 +557,19 @@ impl Archetypes {
                 .insert(COMPONENT_ID.stripped(), Layout::new::<Component>());
             registry.add_type_id(TypeId::of::<()>(), ENTITY_ID, "Entity");
             registry.add_type_id(TypeId::of::<Component>(), COMPONENT_ID, "Component");
+            registry.functions.insert(
+                COMPONENT_ID.stripped(),
+                Functions {
+                    clone: <Component as AbstractComponent>::clone_into,
+                    serialize: Component::serialize,
+                    deserialize: Component::deserialize,
+                    as_reflect_ref: Component::as_reflect_ref,
+                    as_reflect_mut: <Component as AbstractComponent>::as_reflect_mut,
+                    to_debug_string: Component::to_debug_string,
+                    into_lua: <Component as AbstractComponent>::into_lua,
+                    from_lua: <Component as AbstractComponent>::from_lua,
+                },
+            );
             registry.add_type_id(TypeId::of::<Wildcard>(), WILDCARD_RELATIONSHIP, "Wildcard");
         }
         let mut entity_archetype_components = BTreeSet::new();
@@ -560,10 +581,10 @@ impl Archetypes {
         .into();
         archetypes.add_archetype(&table, &entity_archetype_components);
         archetypes.register_component::<InstanceOf>();
-        archetypes.register_component::<EnumTagId>();
         archetypes.register_component::<ChildOf>();
         archetypes.register_component::<Prefab>();
         archetypes.register_component::<DynamicTag>();
+        archetypes.register_component::<EnumTagId>();
         archetypes
     }
 
@@ -618,7 +639,8 @@ impl Archetypes {
                     component_id,
                     table_reusage,
                 } => {
-                    let table_row = self.record(operation.entity).unwrap().table_row.0;
+                    let record = self.record(operation.entity).unwrap();
+                    let table_row = record.table_row.0;
                     let (archetype, add_state) = self
                         .add_component(component_id, operation.entity, table_reusage)
                         .unwrap();
@@ -629,12 +651,13 @@ impl Archetypes {
                         ComponentAddState::New => {
                             archetype.push_component_ptr(component_id, component);
                         }
-                        ComponentAddState::AlreadyExisted => {
+                        ComponentAddState::AlreadyExists => {
                             let table_mut = archetype.table().borrow_mut();
                             let mut storage = table_mut.storage(component_id).unwrap().borrow_mut();
                             storage.replace_unchecked_ptr(table_row, component);
                         }
                     }
+                    drop(archetype);
                 }
                 OperationType::RemoveComponent(component) => {
                     let table_reusage = if self.is_component_empty(component) {
@@ -659,13 +682,16 @@ impl Archetypes {
         &self.entities_pool
     }
 
-    pub fn id_by_record_index(&self, index: usize) -> Option<Identifier> {
-        self.record_by_index(index).map(|r| r.entity)
+    pub fn id_by_record_index(&self, index: u32) -> Option<Identifier> {
+        self.record_by_index(index).map(|record| record.entity)
     }
 
     pub fn debug_id_name(&self, id: Identifier) -> SmolStr {
         let Some(record) = self.record(id) else {
-            return format!("Invalid entity {0:?}", id).into();
+            if id == COMPONENT_ID {
+                return "Component".into();
+            }
+            return format!("Invalid entity {0:?} - no record", id).into();
         };
         let parent = {
             let child_of_rel = self.find_rels::<ChildOf, Wildcard>(&record).unwrap().next();
@@ -684,7 +710,7 @@ impl Archetypes {
         if self.is_id_component(id) {
             self.debug_component_name(id)
         } else {
-            u64::from(id).to_smolstr()
+            return format!("Entity({})", u64::from(id)).into();
         }
     }
 
@@ -983,72 +1009,92 @@ impl Archetypes {
         Ok(entity.into())
     }
 
-    pub fn clone_entity(&mut self, entity: Identifier) -> Option<Identifier> {
-        let cloned_entity = self.add_entity(EntityKind::Regular);
-        let old_record = self.record(entity)?;
-        let old_archetype = self.archetype_by_id(old_record.arhetype_id).clone();
-        let old_archetype_ref = old_archetype.borrow();
+    pub fn clone_entity(&mut self, origin_entity: Identifier) -> Option<Identifier> {
+        let cloned_entity = self.entity_id();
+        let origin_record = self.record(origin_entity)?;
+        let origin_archetype = self.archetype_by_id(origin_record.arhetype_id).clone();
+        let origin_archetype_ref = origin_archetype.borrow();
         let registry = self.type_registry.clone();
         let registry_ref = registry.borrow();
-        let components = old_archetype_ref.components_ids_set_rc().clone();
-        drop(old_archetype_ref);
+        let origin_components = origin_archetype_ref.components_ids_set_rc().clone();
+        let last_archetype_row = (origin_archetype_ref.len()).into();
+        let last_table_row = {
+            let table = origin_archetype_ref.table().borrow();
+            (table.len()).max(0).into()
+        };
+        drop(origin_archetype_ref);
 
-        for component in components.iter().copied() {
+        {
+            let mut archetype_mut = origin_archetype.borrow_mut();
+            archetype_mut.push_entity(cloned_entity.low32(), ArchetypeAdd::ArchetypeAndTable);
+        }
+
+        self.modify_record(cloned_entity, |cloned_record| {
+            let cloned_entity_unpacked = cloned_entity.unpack();
+            let entity_unpacked = origin_entity.unpack();
+            let new_record = EntityRecord {
+                arhetype_id: origin_record.arhetype_id,
+                table_row: last_table_row,
+                archetype_row: last_archetype_row,
+                entity: IdentifierUnpacked {
+                    low32: cloned_entity_unpacked.low32,
+                    high32: IdentifierHigh32 {
+                        second: cloned_entity_unpacked.high32.second,
+                        ..entity_unpacked.high32
+                    },
+                }
+                .into(),
+            };
+
+            *cloned_record = Some(new_record);
+        });
+        // if let Some(record) = self.record(cloned_entity) {
+        //     let entity_archetype = self.entity_archetype().clone();
+        //     let mut entity_archetype = entity_archetype.borrow_mut();
+        //     entity_archetype.remove_forget(self, record.archetype_row, Some(record.table_row));
+        // }
+
+        for component in origin_components.iter().copied() {
+            if component == self.component_id::<Prefab>() {
+                continue;
+            }
             let table_reusage = if self.is_component_empty(component) {
                 TableReusage::Reuse
             } else {
                 TableReusage::New
             };
-            let (cloned_archetype, _) = self
-                .add_component(component, cloned_entity, table_reusage)
-                .ok()?;
-
             if matches!(table_reusage, TableReusage::Reuse) {
                 continue;
             }
 
-            let old_archetype_ref = old_archetype.borrow();
-            let cloned_archetype_ref = cloned_archetype.borrow();
+            let archetype_ref = origin_archetype.borrow();
             let clone_into = registry_ref
                 .functions
                 .get(&component.stripped())
                 .unwrap()
                 .clone;
-            let old_storage = old_archetype_ref
+            let storage = archetype_ref
                 .table()
                 .borrow()
                 .storage(component)
                 .unwrap()
                 .clone();
-            let old_storage_mut = old_storage.borrow_mut();
-            let component_ptr: *mut u8 = unsafe {
-                old_storage_mut
-                    .0
-                    .get_checked(old_record.table_row.0)
-                    .as_ptr()
-            };
-            let cloned_storage = cloned_archetype_ref
-                .table()
-                .borrow()
-                .storage(component)
-                .unwrap()
-                .clone();
-            if Rc::ptr_eq(&cloned_storage, &old_storage) {
-                clone_into(
-                    unsafe { Ptr::new(NonNull::new(component_ptr).unwrap()) },
-                    old_storage_mut,
-                );
-            } else {
-                let cloned_storage_mut = cloned_storage.borrow_mut();
-                clone_into(
-                    unsafe { Ptr::new(NonNull::new(component_ptr).unwrap()) },
-                    cloned_storage_mut,
-                );
-            }
-            //TODO: should add callbacks fire when cloning entities?
-            // self.callbacks
-            //     .borrow_mut()
-            //     .run_add_callback(component, cloned_entity);
+            let storage_mut = storage.borrow_mut();
+            clone_into(origin_record.table_row.0, None, storage_mut);
+            // if Rc::ptr_eq(&cloned_storage, &old_storage) {
+            //     clone_into(old_record.table_row.0, None, old_storage_mut);
+            // } else {
+            //     let cloned_storage_mut = cloned_storage.borrow_mut();
+            //     clone_into(
+            //         old_record.table_row.0,
+            //         Some(old_storage_mut),
+            //         cloned_storage_mut,
+            //     );
+            // }
+            // //TODO: should add callbacks fire when cloning entities?
+            // // self.callbacks
+            // //     .borrow_mut()
+            // //     .run_add_callback(component, cloned_entity);
         }
         Some(cloned_entity)
     }
@@ -1104,13 +1150,13 @@ impl Archetypes {
         let name = self.names.get_by_left(&left).map(|r| r.name.clone());
         if let Some(name) = name {
             let old_unique_name = UniqueName::new(left.parent_index, name.clone());
-            let new_unique_name = UniqueName::new(parent.low32() as usize, name.clone());
+            let new_unique_name = UniqueName::new(parent.low32(), name.clone());
             self.unique_names.remove(&old_unique_name);
             self.unique_names.insert(new_unique_name);
         }
         if self.name_by_entity(&left).is_some() {
             let (_, old_right) = self.names.remove_by_left(&left).unwrap();
-            let entity = NameLeft::new(left.entity_index, parent.low32() as usize);
+            let entity = NameLeft::new(left.entity_index, parent.low32());
             self.names
                 .insert(entity, entity.to_name_and_parent(old_right.name));
         }
@@ -1154,9 +1200,9 @@ impl Archetypes {
         self.type_registry.clone()
     }
 
-    pub fn record_by_index(&self, index: usize) -> Ref<Option<EntityRecord>> {
+    pub fn record_by_index(&self, index: u32) -> Ref<Option<EntityRecord>> {
         let records = self.records.borrow();
-        Ref::map(records, |r| &r[index])
+        Ref::map(records, |record| &record[index as usize])
     }
 
     pub fn record(&self, entity: Identifier) -> Option<EntityRecord> {
@@ -1205,7 +1251,7 @@ impl Archetypes {
         self.record(id.into()).map(|record| record.entity)
     }
 
-    pub fn debug_print_tables(&self) {
+    pub fn debug_tables_info(&self) -> Vec<(TableId, String)> {
         let mut tables: Vec<_> = self
             .archetypes
             .iter()
@@ -1213,9 +1259,30 @@ impl Archetypes {
             .collect();
         tables.sort_by_key(|a| a.borrow().id());
         Vec::dedup_by(&mut tables, |a, b| a.borrow().id() == b.borrow().id());
-        for table in &tables {
-            table.borrow().debug_print(self);
-        }
+        tables
+            .into_iter()
+            .map(|t| {
+                let t = t.borrow();
+                (t.id(), t.debug_info(self))
+            })
+            .collect()
+    }
+
+    pub fn debug_tables_components_info(&self) -> Vec<(TableId, String)> {
+        let mut tables: Vec<_> = self
+            .archetypes
+            .iter()
+            .map(|a| a.borrow().table().clone())
+            .collect();
+        tables.sort_by_key(|a| a.borrow().id());
+        Vec::dedup_by(&mut tables, |a, b| a.borrow().id() == b.borrow().id());
+        tables
+            .into_iter()
+            .map(|t| {
+                let t = t.borrow();
+                (t.id(), t.debug_components_info(self, 0..t.len()))
+            })
+            .collect()
     }
 
     pub fn relationship_name(&self, _relationship: Identifier) -> Option<String> {
@@ -1303,6 +1370,9 @@ impl Archetypes {
                     deserialize: T::deserialize,
                     as_reflect_ref: T::as_reflect_ref,
                     as_reflect_mut: T::as_reflect_mut,
+                    to_debug_string: T::to_debug_string,
+                    into_lua: T::into_lua,
+                    from_lua: T::from_lua,
                 },
             );
             type_registry
@@ -1329,7 +1399,7 @@ impl Archetypes {
             ComponentAddState::New => {
                 archetype.push_component::<T>(relationship, value);
             }
-            ComponentAddState::AlreadyExisted => {
+            ComponentAddState::AlreadyExists => {
                 let table_mut = archetype.table().borrow_mut();
                 let mut storage = table_mut.storage(relationship).unwrap().borrow_mut();
                 storage.replace_unchecked(
@@ -1524,7 +1594,7 @@ impl Archetypes {
                 .remove_drop(self, record.archetype_row, None);
             let (archetype_row, _) = new_archetype
                 .borrow_mut()
-                .push_entity(entity.low32() as usize, ArchetypeAdd::ArchetypeOnly);
+                .push_entity(entity.low32(), ArchetypeAdd::ArchetypeOnly);
             (archetype_row, record.table_row)
         };
         *self.record_mut(entity) = Some(EntityRecord {
@@ -1546,7 +1616,7 @@ impl Archetypes {
         let entity_archetype_id = entity_archetype.borrow().id();
         let (archetype_row, _) = entity_archetype
             .borrow_mut()
-            .push_entity(id.low32() as usize, ArchetypeAdd::ArchetypeOnly);
+            .push_entity(id.low32(), ArchetypeAdd::ArchetypeOnly);
         let record = EntityRecord {
             archetype_row,
             //TODO: investigate that
@@ -1583,7 +1653,7 @@ impl Archetypes {
             })
     }
 
-    pub fn register_component<T: AbstractComponent>(&mut self) {
+    pub fn register_component<T: AbstractComponent + bevy_reflect::GetTypeRegistration>(&mut self) {
         let type_id = TypeId::of::<T>();
         let type_id_ref = TypeId::of::<&T>();
         let type_id_mut = TypeId::of::<&mut T>();
@@ -1596,6 +1666,7 @@ impl Archetypes {
         type_registry.add_type_id(type_id, id, &component_name);
         type_registry.add_type_id(type_id_ref, id, &component_name);
         type_registry.add_type_id(type_id_mut, id, &component_name);
+        type_registry.bevy_registry.register::<T>();
         if std::mem::size_of::<T>() > 0 {
             type_registry
                 .layouts
@@ -1608,6 +1679,9 @@ impl Archetypes {
                     deserialize: T::deserialize,
                     as_reflect_ref: T::as_reflect_ref,
                     as_reflect_mut: T::as_reflect_mut,
+                    to_debug_string: T::to_debug_string,
+                    from_lua: T::from_lua,
+                    into_lua: T::into_lua,
                 },
             );
         }
@@ -1829,7 +1903,7 @@ impl Archetypes {
             ComponentAddState::New => {
                 archetype.push_component::<T>(component, value);
             }
-            ComponentAddState::AlreadyExisted => {
+            ComponentAddState::AlreadyExists => {
                 let table_mut = archetype.table().borrow_mut();
                 let mut storage = table_mut.storage(component).unwrap().borrow_mut();
                 storage.replace_unchecked(self.record(entity).unwrap().table_row.0, value);
@@ -1986,11 +2060,14 @@ impl Archetypes {
         table_reusage: TableReusage,
     ) -> Result<(ArchetypeCell, ComponentAddState)> {
         if !self.is_entity_alive(entity) {
-            bail!("expected entity to be alive")
+            bail!("expected entity {:?} to be alive", Entity::new(entity))
         }
         let record = match self.record(entity) {
             Some(r) => r,
-            None => bail!("expected initialized record"),
+            None => bail!(
+                "expected initialized record for entity {:?}",
+                Entity::new(entity)
+            ),
         };
         let old_archetype = self.archetype_by_id(record.arhetype_id).clone();
         let (old_id, old_table, mut old_edge_cloned) = {
@@ -1998,7 +2075,7 @@ impl Archetypes {
             (old.id(), old.table().clone(), old.edge_cloned(component))
         };
         if self.has_component(component, entity) {
-            return Ok((old_archetype, ComponentAddState::AlreadyExisted));
+            return Ok((old_archetype, ComponentAddState::AlreadyExists));
         }
         let reuse_table = matches!(table_reusage, TableReusage::Reuse);
         let new_archetype = match old_edge_cloned.add {
@@ -2007,13 +2084,22 @@ impl Archetypes {
                 let mut new_components = old_archetype.borrow().components_ids_set().clone();
                 new_components.insert(component);
                 new_components.remove(&ENTITY_ID);
-                let new_table = match reuse_table {
-                    true => self
-                        .table_by_components(&new_components)
-                        .cloned()
-                        .unwrap_or(old_table.into()),
-                    false => Table::new(&new_components, self.type_registry.clone()).into(),
-                };
+                // if component != COMPONENT_ID {
+                //     let name = self.debug_id_name(entity);
+                //     dbg!(name, self.debug_id_name(component));
+                // }
+                let new_table = self
+                    .table_by_components(&new_components)
+                    .cloned()
+                    .unwrap_or({
+                        match table_reusage {
+                            TableReusage::Reuse => old_table.into(),
+                            TableReusage::New => {
+                                Table::new(&new_components, self.type_registry.clone()).into()
+                            }
+                        }
+                    });
+                // println!("------------------------------");
                 let new_archetype = self
                     .archetype_by_components(&new_components)
                     .cloned()
@@ -2025,8 +2111,8 @@ impl Archetypes {
         };
         old_archetype.borrow_mut().edge_mut(component).add = old_edge_cloned.add;
         let (new_achetype_row, new_table_row) = if !reuse_table {
-            let old = old_archetype.borrow_mut();
             let new = new_archetype.borrow_mut();
+            let old = old_archetype.borrow_mut();
             Table::move_entity(
                 self,
                 entity,
@@ -2041,7 +2127,7 @@ impl Archetypes {
                 .remove_drop(self, record.archetype_row, None);
             let (archetype_row, _) = new_archetype
                 .borrow_mut()
-                .push_entity(entity.low32() as usize, ArchetypeAdd::ArchetypeOnly);
+                .push_entity(entity.low32(), ArchetypeAdd::ArchetypeOnly);
             (archetype_row, record.table_row)
         };
         *self.record_mut(entity) = Some(EntityRecord {
@@ -2053,9 +2139,9 @@ impl Archetypes {
         Ok((new_archetype.clone(), ComponentAddState::New))
     }
 
-    pub fn record_mut_by_index(&mut self, index: usize) -> RefMut<Option<EntityRecord>> {
+    pub fn record_mut_by_index(&mut self, index: u32) -> RefMut<Option<EntityRecord>> {
         let records = self.records.borrow_mut();
-        RefMut::map(records, |r| &mut r[index])
+        RefMut::map(records, |records| &mut records[index as usize])
     }
 
     pub fn record_mut(&mut self, entity: Identifier) -> RefMut<Option<EntityRecord>> {
@@ -2070,7 +2156,7 @@ impl Archetypes {
         f(&mut self.record_mut(entity));
     }
 
-    pub fn modify_record_by_index<F>(&mut self, index: usize, f: F)
+    pub fn modify_record_by_index<F>(&mut self, index: u32, f: F)
     where
         F: FnOnce(&mut Option<EntityRecord>),
     {
@@ -2081,14 +2167,16 @@ impl Archetypes {
         &self,
         components: &BTreeSet<Identifier>,
     ) -> Option<&ArchetypeCell> {
-        let archetypes = self.archetypes_by_hashes.get(&components.regular_hash())?;
+        let archetypes = self
+            .archetypes_by_hashes
+            .get(&components.archetype_hash())?;
         archetypes
             .iter()
             .find(|a| a.borrow().components_ids_set() == components)
     }
 
     pub fn table_by_components(&self, components: &BTreeSet<Identifier>) -> Option<&TableCell> {
-        let tables = self.tables_by_hashes.get(&components.regular_hash())?;
+        let tables = self.tables_by_hashes.get(&components.table_hash(self))?;
         tables
             .iter()
             .find(|a| components == a.borrow().component_ids())
@@ -2099,7 +2187,7 @@ impl Archetypes {
         table: &TableCell,
         components: &BTreeSet<Identifier>,
     ) -> ArchetypeCell {
-        let regular_hash = components.regular_hash();
+        let regular_hash = components.archetype_hash();
         let table_hash = components.table_hash(self);
         let archetype: ArchetypeCell = Archetype::new(table.clone().0, components.clone()).into();
         self.archetypes.push(archetype.clone());
@@ -2168,6 +2256,7 @@ impl Archetypes {
     }
 
     pub fn add_table_by_hash(&mut self, table: TableCell, hash: u64) {
+        let id = table.borrow().id();
         if let Some(tables) = self.tables_by_hashes.get_mut(&hash) {
             tables.push(Into::into(table.clone()));
             return;
@@ -2197,6 +2286,10 @@ impl Archetypes {
 
     pub fn state_operations(&self) -> &RefCell<Vec<StateOperation>> {
         &self.state_operations
+    }
+
+    pub fn lua_api(&self) -> &Rc<RefCell<LuaApi>> {
+        &self.lua_api
     }
 }
 

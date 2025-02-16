@@ -82,7 +82,7 @@ impl Iterator for ChildrenRecursiveIter {
         }
 
         self.index += 1;
-        Some(children[self.index - 1])
+        Some(children[self.index - 1].clone())
     }
 }
 
@@ -116,7 +116,7 @@ impl Drop for ChildrenRecursiveIterRef<'_> {
     }
 }
 
-impl<'a> Iterator for ChildrenRecursiveIterRef<'a> {
+impl Iterator for ChildrenRecursiveIterRef<'_> {
     type Item = (Entity, Depth);
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -129,6 +129,6 @@ impl<'a> Iterator for ChildrenRecursiveIterRef<'a> {
         }
 
         self.index += 1;
-        Some(children[self.index - 1])
+        Some(children[self.index - 1].clone())
     }
 }

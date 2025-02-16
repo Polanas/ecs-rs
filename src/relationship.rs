@@ -51,29 +51,23 @@ impl Relationship {
     }
 
     pub fn relation(&self) -> Entity {
-        Entity(archetypes(|a| a.relation_entity(self.0)).unwrap())
+        Entity::new(archetypes(|a| a.relation_entity(self.0)).unwrap())
     }
 
     pub fn target(&self) -> Entity {
-        Entity(archetypes(|a| a.target_entity(self.0).unwrap()))
+        Entity::new(archetypes(|a| a.target_entity(self.0).unwrap()))
     }
 }
 
-#[derive()]
 pub struct RelationshipsIter {
-    components: Vec<Identifier>,
+    archetype: ArchetypeCell,
     index: usize,
 }
 
 impl RelationshipsIter {
     pub fn new(archetype: &ArchetypeCell) -> Self {
         Self {
-            components: archetype
-                .borrow()
-                .components_ids_set()
-                .iter()
-                .cloned()
-                .collect(),
+            archetype: archetype.clone(),
             index: 0,
         }
     }
@@ -83,12 +77,14 @@ impl Iterator for RelationshipsIter {
     type Item = Relationship;
 
     fn next(&mut self) -> Option<Self::Item> {
+        let archetype = self.archetype.borrow();
+        let components = archetype.components_ids();
         let component: Identifier = loop {
-            if self.index == self.components.len() {
+            if self.index == components.len() {
                 return None;
             }
 
-            let component = self.components[self.index];
+            let component = components[self.index];
             self.index += 1;
             if !component.is_relationship() {
                 continue;

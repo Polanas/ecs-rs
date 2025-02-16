@@ -420,6 +420,11 @@ impl BlobVec {
             }
         }
     }
+
+    #[inline]
+    pub fn data(&self) -> NonNull<u8> {
+        self.data
+    }
 }
 
 impl Drop for BlobVec {

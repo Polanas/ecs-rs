@@ -57,14 +57,14 @@ impl OnChangeCallbacks {
         let Some(callback) = self.add_callbacks.get(&component) else {
             return;
         };
-        callback.run(Entity(entity), World::default());
+        callback.run(Entity::new(entity), World::default());
     }
 
     pub fn run_remove_callback(&self, component: Identifier, entity: Identifier) {
         let Some(callback) = self.remove_callbacks.get(&component) else {
             return;
         };
-        callback.run(Entity(entity), World::default());
+        callback.run(Entity::new(entity), World::default());
     }
 }
 

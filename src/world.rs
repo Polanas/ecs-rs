@@ -1,18 +1,30 @@
-use std::{any::TypeId, cell::RefCell, rc::Rc};
+use std::{
+    any::TypeId,
+    cell::{Ref, RefCell},
+    rc::Rc,
+};
 
 use smol_str::{SmolStr, ToSmolStr};
 
 use crate::{
-    archetypes::{Archetypes, EntityKind, Prefab, StateOperation, ENTITY_ID},
+    archetypes::{
+        self, Archetypes, EntityKind, InstanceOf, MyTypeRegistry, Prefab, StateOperation, ENTITY_ID,
+    },
     components::{component::AbstractComponent, register::RegisterComponentQuery},
     entity::Entity,
     entity_parser::ParseError,
-    events::{self, CurrentSystemTypeId, Event, EventReader, Events},
+    events::{self, CurrentSystemId, Event, EventReader, Events},
+    expect_fn::ExpectFnResult,
+    locals::{LocalId, LocalQueryMut, SystemLocals},
+    lua_api::LuaApi,
     on_change_callbacks::{OnAddCallback, OnRemoveCallback},
-    plugins::Plugins,
+    plugin::Plugin,
     query::{QueryData, QueryFilterData, QueryState},
     resources::ResourceQuery,
-    systems::{AbstractSystemsWithStateData, StateGetter, SystemStage, SystemState, Systems},
+    systems::{
+        IntoSystem, IntoSystems, StateGetter, System, SystemId, SystemStage, SystemState, Systems,
+    },
+    table::TableId,
 };
 
 #[derive(Default)]
@@ -56,9 +68,28 @@ impl World {
         ARCHETYPES.with(|a| {
             *a.borrow_mut() = Some(Archetypes::new());
         });
-        Self {
+        let world = Self {
             currently_running_systems: false,
-        }
+        };
+        world.add_resource(CurrentSystemId::new(SystemId(0)));
+        world.add_resource(SystemLocals::new());
+        world
+    }
+
+    pub fn lua_api(&self) -> Rc<RefCell<LuaApi>> {
+        archetypes(|archetypes| archetypes.lua_api().clone())
+    }
+
+    pub fn debug_tables_info(&self) -> Vec<(TableId, String)> {
+        archetypes(|a| a.debug_tables_info())
+    }
+
+    pub fn debug_tables_components_info(&self) -> Vec<(TableId, String)> {
+        archetypes(|a| a.debug_tables_components_info())
+    }
+
+    pub fn type_registry(&self) -> Rc<RefCell<MyTypeRegistry>> {
+        archetypes(|a| a.type_registry_rc().clone())
     }
 
     pub fn entity_by_global_name(&self, name: &str) -> Option<Entity> {
@@ -80,7 +111,7 @@ impl World {
     }
 
     pub fn event_reader<T: Event>(&self) -> Rc<RefCell<EventReader<T>>> {
-        self.resources_ret::<(&CurrentSystemTypeId, &mut Events<T>), _>(|(system_id, events)| {
+        self.resources_ret::<(&CurrentSystemId, &mut Events<T>), _>(|(system_id, events)| {
             events.event_reader(system_id.value)
         })
     }
@@ -93,22 +124,26 @@ impl World {
     }
 
     pub fn comp_entity<T: AbstractComponent>(&self) -> Entity {
-        archetypes_mut(|a| Entity(a.component_id::<T>()))
+        archetypes_mut(|a| Entity::new(a.component_id::<T>()))
     }
 
-    pub fn add_plugins<P: Plugins>(&self, plugins: P) -> Self {
-        plugins.add_plugins(self);
+    pub fn add_systems<I, S: System + 'static>(
+        &self,
+        into: impl IntoSystems<I, System = S>,
+        stage: SystemStage,
+    ) -> Self {
+        let systems = into.into_systems();
+        archetypes_mut(|a| {
+            a.systems()
+                .try_borrow_mut()
+                .expect("attemt to add a new system while inside another system (or systems is borrowed for some other reason)")
+                .add_systems(systems, stage);
+        });
         self.clone()
     }
 
-    pub fn add_systems<S: AbstractSystemsWithStateData + 'static>(
-        &self,
-        system: S,
-        stage: SystemStage,
-    ) -> Self {
-        archetypes_mut(|a| {
-            a.systems().borrow_mut().add_systems(system, stage);
-        });
+    pub fn add_plugins<P: Plugin>(&self, plugin: P) -> Self {
+        plugin.build(self);
         self.clone()
     }
 
@@ -172,12 +207,13 @@ impl World {
         systems.get_state::<T>().unwrap()
     }
 
-    pub fn run(&mut self) {
+    pub fn run(&mut self, context: &egui::Context) {
+        self.resources::<&mut SystemLocals>(|locals| locals.reset_ids());
         self.remove_empty_entities();
         let systems = archetypes_mut(|a| a.systems().clone());
         self.currently_running_systems = true;
         let mut systems = systems.borrow_mut();
-        systems.run(self);
+        systems.run(self, context);
         self.currently_running_systems = false;
         self.process_state_operations(&mut systems);
     }
@@ -185,7 +221,7 @@ impl World {
     fn remove_empty_entities(&self) {
         for entity in self
             .query::<&Entity>()
-            .with_ent_tag(Entity(ENTITY_ID))
+            .with_ent_tag(Entity::new(ENTITY_ID))
             .build()
             .iter()
         {
@@ -201,6 +237,7 @@ impl World {
         })
     }
 
+    //TODO: add optional version of this method: get_resources
     pub fn resources<T: ResourceQuery>(&self, f: impl for<'i> FnOnce(T::Item<'i>)) {
         let resources = archetypes(|a| a.resources().clone());
         f(T::fetch(&resources));
@@ -253,26 +290,32 @@ impl World {
         archetypes_mut(|a| a.resource_exists::<T>())
     }
 
+    pub fn add_instance_of(&self, prefab: &Entity) -> Entity {
+        let entity = prefab.deep_clone();
+        entity.remove_tag::<Prefab>();
+        entity.add_mixed_tag_rel::<InstanceOf>(prefab)
+    }
+
     pub fn add_entity_named(&self, name: &str) -> Entity {
         let id = archetypes_mut(|a| a.add_entity(EntityKind::Regular));
-        let entity = Entity(id);
+        let entity = Entity::new(id);
         entity.set_name(name);
         entity
     }
 
     pub fn add_entity(&self) -> Entity {
         let id = archetypes_mut(|a| a.add_entity(EntityKind::Regular));
-        Entity(id)
+        Entity::new(id)
     }
 
     pub fn add_prefab_named(&self, name: &str) -> Entity {
-        let prefab = self.add_entity();
+        let mut prefab = self.add_entity();
         prefab.set_name(name);
         prefab.add_tag::<Prefab>()
     }
 
     pub fn add_prefab(&self) -> Entity {
-        let prefab = self.add_entity();
+        let mut prefab = self.add_entity();
         prefab.add_tag::<Prefab>()
     }
 

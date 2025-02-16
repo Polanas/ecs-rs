@@ -63,7 +63,7 @@ impl Edge {
 }
 
 pub struct Archetype {
-    entity_indices: Vec<usize>,
+    entity_indices: Vec<u32>,
     table: Rc<RefCell<Table>>,
     id: ArchetypeId,
     edges: HashMap<Identifier, Edge>,
@@ -99,7 +99,7 @@ impl Archetype {
 
     pub fn push_entity(
         &mut self,
-        index: usize,
+        index: u32,
         add_type: ArchetypeAdd,
     ) -> (ArchetypeRow, Option<TableRow>) {
         self.count += 1;
@@ -248,7 +248,7 @@ impl Archetype {
         self.edges.entry(id).or_default()
     }
 
-    pub fn entity_indices(&self) -> &[usize] {
+    pub fn entity_indices(&self) -> &[u32] {
         &self.entity_indices
     }
 }
