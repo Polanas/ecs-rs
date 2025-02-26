@@ -1,6 +1,7 @@
 use std::fmt::Debug;
 
 use bevy_reflect::Reflect;
+use macro_rules_attribute::apply;
 use packed_struct::{
     derive::PackedStruct,
     types::{bits::Bits, Integer},

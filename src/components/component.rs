@@ -1,8 +1,8 @@
+use crate::{systems::EnumId, table::Storage};
 use bevy_ptr::Ptr;
 use bevy_reflect::Reflect;
 use macro_rules_attribute::apply;
 use std::{any::Any, cell::RefMut, fmt::Debug};
-use crate::{systems::EnumId, table::Storage};
 
 #[macro_export]
 macro_rules! Component {
@@ -209,13 +209,17 @@ macro_rules! Component {
 
             fn into_lua<'a>(value: bevy_ptr::Ptr<'_>, lua: &'a mlua::Lua) -> mlua::Result<mlua::Value<'a>> {
                 let value = unsafe { value.deref::<$name>() };
-                mlua::LuaSerdeExt::to_value(lua, &value)
+                <$name as mlua::IntoLua>::into_lua(value.clone(), lua)
             }
 
-            fn from_lua<'lua>(mlua_value: mlua::Value<'lua>, mut storage: std::cell::RefMut<$crate::table::Storage>, lua: &'lua mlua::Lua) -> mlua::Result<()> {
-                match mlua::LuaSerdeExt::from_value::<$name>(lua, mlua_value) {
+            fn from_lua<'lua>(mlua_value: mlua::Value<'lua>, mut storage: std::cell::RefMut<$crate::table::Storage>, table_row: Option<usize>, lua: &'lua mlua::Lua) -> mlua::Result<()> {
+                match <$name as mlua::FromLua>::from_lua(mlua_value,lua) {
                     Ok(new_value) => {
-                        storage.push(new_value);
+                        if let Some(table_row) = table_row {
+                            storage.replace_unchecked(table_row, new_value);
+                        } else {
+                            storage.push(new_value);
+                        }
                         Ok(())
                     },
                     Err(error) => Err(error)
@@ -299,13 +303,17 @@ macro_rules! Component {
 
             fn into_lua<'a>(value: bevy_ptr::Ptr<'_>, lua: &'a mlua::Lua) -> mlua::Result<mlua::Value<'a>> {
                 let value = unsafe { value.deref::<$name>() };
-                mlua::LuaSerdeExt::to_value(lua, &value)
+                <$name as mlua::IntoLua>::into_lua(value.clone(), lua)
             }
 
-            fn from_lua<'lua>(mlua_value: mlua::Value<'lua>, mut storage: std::cell::RefMut<$crate::table::Storage>, lua: &'lua mlua::Lua) -> mlua::Result<()> {
-                match mlua::LuaSerdeExt::from_value::<$name>(lua, mlua_value) {
+            fn from_lua<'lua>(mlua_value: mlua::Value<'lua>, mut storage: std::cell::RefMut<$crate::table::Storage>, table_row: Option<usize>, lua: &'lua mlua::Lua) -> mlua::Result<()> {
+                match <$name as mlua::FromLua>::from_lua(mlua_value,lua) {
                     Ok(new_value) => {
-                        storage.push(new_value);
+                        if let Some(table_row) = table_row {
+                            storage.replace_unchecked(table_row, new_value);
+                        } else {
+                            storage.push(new_value);
+                        }
                         Ok(())
                     },
                     Err(error) => Err(error)
@@ -381,13 +389,17 @@ macro_rules! Component {
 
             fn into_lua<'a>(value: bevy_ptr::Ptr<'_>, lua: &'a mlua::Lua) -> mlua::Result<mlua::Value<'a>> {
                 let value = unsafe { value.deref::<$name>() };
-                mlua::LuaSerdeExt::to_value(lua, &value)
+                <$name as mlua::IntoLua>::into_lua(value.clone(), lua)
             }
 
-            fn from_lua<'lua>(mlua_value: mlua::Value<'lua>, mut storage: std::cell::RefMut<$crate::table::Storage>, lua: &'lua mlua::Lua) -> mlua::Result<()> {
-                match mlua::LuaSerdeExt::from_value::<$name>(lua, mlua_value) {
+            fn from_lua<'lua>(mlua_value: mlua::Value<'lua>, mut storage: std::cell::RefMut<$crate::table::Storage>, table_row: Option<usize>, lua: &'lua mlua::Lua) -> mlua::Result<()> {
+                match <$name as mlua::FromLua>::from_lua(mlua_value,lua) {
                     Ok(new_value) => {
-                        storage.push(new_value);
+                        if let Some(table_row) = table_row {
+                            storage.replace_unchecked(table_row, new_value);
+                        } else {
+                            storage.push(new_value);
+                        }
                         Ok(())
                     },
                     Err(error) => Err(error)
@@ -467,10 +479,14 @@ macro_rules! Component {
                 <$name as mlua::IntoLua>::into_lua(value.clone(), lua)
             }
 
-            fn from_lua<'lua>(mlua_value: mlua::Value<'lua>, mut storage: std::cell::RefMut<$crate::table::Storage>, lua: &'lua mlua::Lua) -> mlua::Result<()> {
-                match <$name as mlua::FromLua>::from_lua(mlua_value, lua) {
+            fn from_lua<'lua>(mlua_value: mlua::Value<'lua>, mut storage: std::cell::RefMut<$crate::table::Storage>, table_row: Option<usize>, lua: &'lua mlua::Lua) -> mlua::Result<()> {
+                match <$name as mlua::FromLua>::from_lua(mlua_value,lua) {
                     Ok(new_value) => {
-                        storage.push(new_value);
+                        if let Some(table_row) = table_row {
+                            storage.replace_unchecked(table_row, new_value);
+                        } else {
+                            storage.push(new_value);
+                        }
                         Ok(())
                     },
                     Err(error) => Err(error)
@@ -510,6 +526,7 @@ macro_rules! EnumTag {
         $($(#[$vmeta:meta])? $vname:ident $(,)?)*
     }) => {
         $(#[$meta])?
+        #[macro_rules_attribute::apply($crate::FromIntoLua)]
         #[derive(educe::Educe)]
         #[educe(Debug)]
         #[derive(Clone, Copy, bevy_reflect::Reflect, serde::Serialize, serde::Deserialize)]
@@ -563,13 +580,17 @@ macro_rules! EnumTag {
 
             fn into_lua<'a>(value: bevy_ptr::Ptr<'_>, lua: &'a mlua::Lua) -> mlua::Result<mlua::Value<'a>> {
                 let value = unsafe { value.deref::<$name>() };
-                mlua::LuaSerdeExt::to_value(lua, &value)
+                <$name as mlua::IntoLua>::into_lua(value.clone(), lua)
             }
 
-            fn from_lua<'lua>(mlua_value: mlua::Value<'lua>, mut storage: std::cell::RefMut<$crate::table::Storage>, lua: &'lua mlua::Lua) -> mlua::Result<()> {
-                match mlua::LuaSerdeExt::from_value::<$name>(lua, mlua_value) {
+            fn from_lua<'lua>(mlua_value: mlua::Value<'lua>, mut storage: std::cell::RefMut<$crate::table::Storage>, table_row: Option<usize>, lua: &'lua mlua::Lua) -> mlua::Result<()> {
+                match <$name as mlua::FromLua>::from_lua(mlua_value,lua) {
                     Ok(new_value) => {
-                        storage.push(new_value);
+                        if let Some(table_row) = table_row {
+                            storage.replace_unchecked(table_row, new_value);
+                        } else {
+                            storage.push(new_value);
+                        }
                         Ok(())
                     },
                     Err(error) => Err(error)
@@ -604,7 +625,9 @@ enum TestEnum {
     TupleVariant,
     #[reflect(ignore)]
     TupleVariant2(i32, u32),
-    NamedVariant { name: i32 },
+    NamedVariant {
+        name: i32,
+    },
 }
 
 pub trait AbstractComponent: 'static + Sized {
@@ -621,9 +644,9 @@ pub trait AbstractComponent: 'static + Sized {
     fn from_lua<'lua>(
         mlua_value: mlua::Value<'lua>,
         storage: RefMut<Storage>,
+        table_row: Option<usize>,
         lua: &'lua mlua::Lua,
     ) -> mlua::Result<()>;
-    // fn from_lua(value: bevy_ptr::PtrMut<'_>, table: mlua::Table);
 }
 pub trait EnumTag: AbstractComponent + 'static {
     fn id(&self) -> EnumId;

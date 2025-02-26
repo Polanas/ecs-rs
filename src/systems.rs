@@ -768,6 +768,7 @@ impl Systems {
     }
 
     pub fn run(&mut self, world: &World, context: &egui::Context) {
+        //TODO: why not make separate add and init methods?
         self.systems.retain_mut(|s| {
             if matches!(
                 s.stage,

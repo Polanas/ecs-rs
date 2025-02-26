@@ -131,7 +131,7 @@ pub type AsReflectRefFn = fn(Ptr<'_>) -> Option<&'_ dyn Reflect>;
 pub type AsReflectMutFn = fn(PtrMut<'_>) -> Option<&'_ mut dyn Reflect>;
 pub type ToDebugString = fn(Ptr<'_>) -> String;
 pub type IntoLua = for<'a> fn(Ptr<'_>, &'a mlua::Lua) -> mlua::Result<mlua::Value<'a>>;
-pub type FromLua = for<'a> fn(mlua::Value<'a>, RefMut<Storage>, &'a mlua::Lua) -> mlua::Result<()>;
+pub type FromLua = for<'a> fn(mlua::Value<'a>, RefMut<Storage>, Option<usize>, &'a mlua::Lua) -> mlua::Result<()>;
 
 #[derive(Clone)]
 pub struct Functions {
@@ -898,9 +898,9 @@ impl Archetypes {
                         .storage(component)
                         .unwrap()
                         .clone();
-                    let storage_mut = storage.borrow_mut();
+                    let storage = storage.borrow();
                     let component_ptr: *mut u8 =
-                        unsafe { storage_mut.0.get_checked(record.table_row.0).as_ptr() };
+                        unsafe { storage.0.get_checked(record.table_row.0).as_ptr() };
 
                     let component_value =
                         serialize(unsafe { Ptr::new(NonNull::new(component_ptr).unwrap()) })

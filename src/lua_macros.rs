@@ -213,9 +213,11 @@ macro_rules! FromIntoLua {
                 $( #[$meta] )*
                 $vis struct $name;
 
-                impl mlua::UserData for $name {
-                    #[allow(unused_variables)]
-                    fn add_fields<'lua, F: mlua::UserDataFields<'lua, Self>>(fields: &mut F) {}
+                impl<'lua> mlua::IntoLua<'lua> for $name {
+                    fn into_lua(self, lua: &'lua mlua::Lua) -> mlua::Result<mlua::Value<'lua>> {
+                        let table = lua.create_table()?;
+                        Ok(mlua::Value::Table(table))
+                    }
                 }
 
                 impl<'lua> mlua::FromLua<'lua> for $name {
@@ -259,29 +261,27 @@ macro_rules! FromIntoLua {
                     ),*
                 );
 
-                impl mlua::UserData for $name {
-                    fn add_fields<'lua, F: mlua::UserDataFields<'lua, Self>>(fields: &mut F) {
+                impl<'lua> mlua::IntoLua<'lua> for $name {
+                    fn into_lua(self, lua: &'lua mlua::Lua) -> mlua::Result<mlua::Value<'lua>> {
+                        let table = lua.create_table()?;
                         $(
                             ${ignore($field_ty)}
                             let field_name = const_format::concatcp!("{}", ${index()} + 1u32);
-                            fields.add_field_method_get(field_name, |_, this| Ok(this.${index()}.clone()));
-                            fields.add_field_method_set(field_name, |_, this, value: $field_ty| {
-                                this.${index()} = value;
-                                Ok(())
-                            });
+                            table.raw_set(field_name, self.${index()})?;
                         )*
+                        Ok(mlua::Value::Table(table))
                     }
                 }
 
                 impl<'lua> mlua::FromLua<'lua> for $name {
                     fn from_lua(value: mlua::Value<'lua>, _lua: &'lua mlua::Lua) -> mlua::Result<Self> {
                         match value {
-                            mlua::Value::UserData(data) => {
+                            mlua::Value::Table(data) => {
                                 Ok(
                                     $name(
                                         $(
                                             ${ignore($field_ty)}
-                                            mlua::AnyUserDataExt::get(&data, ${index()} + 1)?
+                                            data.raw_get(${index()} + 1u32)?
                                         ),+
                                     )
                                 )
@@ -319,16 +319,14 @@ macro_rules! FromIntoLua {
                         $field_vis $field_name : $field_ty
                     ),*
                 }
-                impl mlua::UserData for $name {
-                    #[allow(unused_variables)]
-                    fn add_fields<'lua, F: mlua::UserDataFields<'lua, Self>>(fields: &mut F) {
+
+                impl<'lua> mlua::IntoLua<'lua> for $name {
+                    fn into_lua(self, lua: &'lua mlua::Lua) -> mlua::Result<mlua::Value<'lua>> {
+                        let table = lua.create_table()?;
                         $(
-                            fields.add_field_method_get(stringify!($field_name), |_, this| Ok(this.$field_name.clone()));
-                            fields.add_field_method_set(stringify!($field_name), |_, this, value: $field_ty| {
-                                this.$field_name = value;
-                                Ok(())
-                            });
+                            table.raw_set(stringify!($field_name), self.$field_name)?;
                         )*
+                        Ok(mlua::Value::Table(table))
                     }
                 }
 

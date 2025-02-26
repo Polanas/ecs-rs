@@ -14,7 +14,7 @@ use crate::world::archetypes;
 pub use crate::{
     archetype::ArchetypeRow, components::component::EnumTag, relationship::RelationshipsIter,
 };
-use crate::{archetypes::ChildOf, entity::Entity, expect_fn::ExpectFnOption};
+use crate::{archetypes::ChildOf, entity::Entity};
 use crate::{
     archetypes::QueryStorage,
     borrow_traits::BorrowFn,

@@ -1,13 +1,9 @@
 use std::marker::PhantomData;
 pub use std::{fmt::Debug, hash::Hash, os::unix::process::parent_id};
 
-use macro_rules_attribute::apply;
-use mlua::IntoLua;
-use num::traits::ToBytes;
 use smol_str::SmolStr;
 
 use crate::{
-    archetype::ArchetypeId,
     archetypes::{
         self, Archetypes, ChildOf, ComponentGetter, EntityNameGetter, EntityRecord,
         GetComponentError, InstanceOf, NameLeft, Prefab, TableReusage, TryGetComponent, Wildcard,
